@@ -273,6 +273,8 @@ pub(crate) fn exports(
     resolve: &Resolve,
     world_id: WorldId,
 ) -> Result<Vec<Export>> {
+    let p2 = perry_contract::target::for_world(resolve, world_id).map_err(anyhow::Error::msg)?
+        == perry_contract::target::Target::P2;
     let world = &resolve.worlds[world_id];
     perry_contract::export_names::validate_implementation_names(resolve, world).map_err(|e| {
         crate::PerryDiagnostic::error(crate::DiagnosticCode::ExportMismatch, e.to_string())
@@ -333,7 +335,7 @@ pub(crate) fn exports(
                 .into());
             };
             let is_async = perry_mir::is_async(ctx, &mir_function);
-            if is_async != function.kind.is_async() {
+            if is_async != function.kind.is_async() && !(p2 && is_async) {
                 return Err(crate::PerryDiagnostic::from(BindError::AsyncMismatch {
                     span: perry_mir::source_span(ctx, &mir_function),
                     implementation,
@@ -354,7 +356,7 @@ pub(crate) fn exports(
                 .map(|ty| abi_type(resolve, ty))
                 .transpose()?;
             // Async exports return through `task.return`, imported from `[export]<interface>`.
-            let kind = if function.kind.is_async() {
+            let kind = if is_async {
                 let module = match entry.interface {
                     Some(_) => format!("[export]{}", resolve.name_world_key(entry.key)),
                     None => "[export]$root".to_string(),
