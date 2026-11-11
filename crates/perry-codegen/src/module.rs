@@ -96,6 +96,7 @@ impl Data {
 /// What the lowering of a module accumulates across its functions. Configuration borrowed
 /// from the [Exports] lives as long as `'e`, so lowering can hold it while emitting.
 pub(crate) struct ModuleState<'e> {
+    pub(crate) p2: bool,
     pub(crate) data: Data,
     pub(crate) wasm: ModuleOp,
     pub(crate) runtime: BTreeSet<Runtime>,
@@ -161,6 +162,19 @@ impl ModuleState<'_> {
 
     /// Whether the WIT world imports `interface` (always, without a world).
     pub(crate) fn can_import(&self, interface: &str) -> bool {
+        if self.p2 {
+            let base = interface.split('@').next().unwrap_or(interface);
+            let base = match base {
+                "wasi:http/client" => "wasi:http/outgoing-handler",
+                "wasi:clocks/system-clock" => "wasi:clocks/wall-clock",
+                other => other,
+            };
+            return self.imports.as_ref().is_none_or(|imports| {
+                imports
+                    .iter()
+                    .any(|name| name.starts_with(&format!("{base}@0.2.")))
+            });
+        }
         self.imports
             .as_ref()
             .is_none_or(|imports| imports.contains(interface))
@@ -195,6 +209,7 @@ pub(crate) fn lower(
         }
     );
     let mut state = ModuleState {
+        p2: matches!(exports, Exports::Canonical { p2: true, .. }),
         data: Data {
             bytes: if matches!(exports, Exports::RawChecked) {
                 vec![0; 8]
@@ -363,6 +378,7 @@ fn bind_exports(
     exports: &[boundary::Export],
 ) -> Result<()> {
     if state.uses_io
+        && !state.p2
         && let Some(export) = exports.iter().find(|e| !e.is_async())
     {
         bail!(

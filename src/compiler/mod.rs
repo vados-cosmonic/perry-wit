@@ -189,6 +189,8 @@ pub(super) fn emit_component(
     strip_unused_stdio: bool,
 ) -> Result<Compiled> {
     let imports = bind::imports(resolve, world);
+    let p2 = perry_contract::target::for_world(resolve, world).map_err(anyhow::Error::msg)?
+        == perry_contract::target::Target::P2;
     let streams = bind::stream_anchor(resolve, world);
     let (mut has_stdout, mut stderr) = (false, false);
     for name in &imports {
@@ -197,6 +199,7 @@ pub(super) fn emit_component(
     }
     let stdout = has_stdout && uses_stdout(ctx, mir);
     let exports = Exports::Canonical {
+        p2,
         memory_checks,
         exports,
         imports,
@@ -205,11 +208,15 @@ pub(super) fn emit_component(
     };
     let mut allocation_report = perry_codegen::explain_tiers(ctx, mir, &exports, analyses)?;
     let core = perry_codegen::compile(ctx, mir, &exports, analyses).map_err(map_codegen_error)?;
-    let (mut core, helpers) = finish(
+    let (mut core, helpers) = finish_target(
         core,
         streams.as_ref(),
         &link::canonical::Requirements::for_world(resolve, world),
+        p2,
     )?;
+    if p2 {
+        core = link::p2::versions(&core, &bind::imports(resolve, world))?;
+    }
     if strip_unused_stdio {
         core = link::raw::available_stdio(core, stdout, stderr)?;
     }
@@ -356,7 +363,16 @@ fn finish(
     streams: Option<&link::StreamAnchor>,
     canonical: &link::canonical::Requirements,
 ) -> Result<(Vec<u8>, u32)> {
-    let (core, helpers) = link::link_helpers_with(core, streams, canonical)
+    finish_target(core, streams, canonical, false)
+}
+
+fn finish_target(
+    core: Vec<u8>,
+    streams: Option<&link::StreamAnchor>,
+    canonical: &link::canonical::Requirements,
+    p2: bool,
+) -> Result<(Vec<u8>, u32)> {
+    let (core, helpers) = link::link_helpers_for_target(core, streams, canonical, p2)
         .context("linking perry-runtime and helpers")?;
     let core = link::compact(&core).context("interning core function signatures")?;
     audit::validate_guest(&core).context("validating stackless core Wasm")?;

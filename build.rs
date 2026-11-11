@@ -16,22 +16,33 @@ fn embed_wasi(manifest: &Path, output: &Path) {
         .map(PathBuf::from)
         .unwrap_or_else(|| manifest.join("wit/deps"));
     let mut generated = String::from("pub(super) const PACKAGES: &[&[(&str, &str)]] = &[\n");
-    for package in ["cli", "clocks", "filesystem", "http", "random", "sockets"] {
+    let p2 = manifest.join("wit/p2/deps");
+    let packages = ["cli", "clocks", "filesystem", "http", "random", "sockets"];
+    for (directory, package) in packages
+        .iter()
+        .map(|p| (&directory, *p))
+        .chain(packages.iter().chain(["io"].iter()).map(|p| (&p2, *p)))
+    {
         let path = directory.join(package);
         println!("cargo:rerun-if-changed={}", path.display());
-        let mut files = fs::read_dir(&path)
-            .unwrap_or_else(|error| {
-                panic!(
-                    "read pinned WASI package {}: {error}; build inside nix develop",
-                    path.display()
-                )
-            })
-            .map(|entry| entry.unwrap().path())
-            .filter(|path| path.extension().is_some_and(|ext| ext == "wit"))
-            .collect::<Vec<_>>();
+        let mut files = if directory.join(format!("{package}.wit")).exists() {
+            vec![directory.join(format!("{package}.wit"))]
+        } else {
+            fs::read_dir(&path)
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "read pinned WASI package {}: {error}; build inside nix develop",
+                        path.display()
+                    )
+                })
+                .map(|entry| entry.unwrap().path())
+                .filter(|path| path.extension().is_some_and(|ext| ext == "wit"))
+                .collect::<Vec<_>>()
+        };
         files.sort();
         generated.push_str("&[\n");
         for file in files {
+            println!("cargo:rerun-if-changed={}", file.display());
             generated.push_str(&format!(
                 "({:?}, {:?}),\n",
                 file.file_name().unwrap().to_str().unwrap(),
