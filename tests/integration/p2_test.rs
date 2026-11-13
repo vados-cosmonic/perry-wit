@@ -435,3 +435,67 @@ fn waiting_services_name_the_p3_interface_a_mixed_world_lacks() {
         assert!(format!("{error:#}").contains(expected), "{error:#}");
     }
 }
+
+/// A `fetch` listener implements `wasi:http/incoming-handler`: the host's request reaches it
+/// as a `Request`, and its `Response` is sent back.
+#[tokio::test(flavor = "current_thread")]
+async fn a_fetch_listener_serves_incoming_requests() -> Result<()> {
+    use http_body_util::{BodyExt, Full};
+    use wasmtime_wasi_http::{
+        WasiHttpView,
+        p2::bindings::{Proxy, http::types::Scheme},
+    };
+    let wit = "package test:fetch;
+world test { export wasi:http/incoming-handler@0.2.12; }";
+    let source = r#"
+async function reply(request: Request): Promise<Response> {
+  const text = await request.text();
+  const path = new URL(request.url).pathname;
+  if (path === '/boom') { throw new Error('boom'); }
+  const tag = request.headers.get('x-in');
+  return new Response(`${request.method} ${path} [${text}] ${tag === null ? '-' : tag}`, {
+    status: 201,
+    headers: { 'content-type': 'text/plain', 'x-unlisted': 'dropped' },
+  });
+}
+addEventListener('fetch', (event) => event.respondWith((async () => {
+  return reply(event.request);
+})()));
+"#;
+    let bytes = Compiler::MemoryChecked.component(wit, "test", "fetch.ts", source)?;
+    let (mut store, instance) = instantiate(bytes, Host::default()).await?;
+    let proxy = Proxy::new(&mut store, &instance)?;
+    for (method, path, body, status, expected) in [
+        ("POST", "/echo", "payload", 201, "POST /echo [payload] abc"),
+        ("GET", "/empty", "", 201, "GET /empty [] abc"),
+        ("GET", "/boom", "", 500, "Internal Server Error"),
+    ] {
+        let request = http::Request::builder()
+            .method(method)
+            .uri(format!("http://example.test{path}"))
+            .header("x-in", "abc")
+            .body(Full::new(bytes::Bytes::from(body)))?;
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let request = store
+            .data_mut()
+            .http()
+            .new_incoming_request(Scheme::Http, request)?;
+        let out = store.data_mut().http().new_response_outparam(sender)?;
+        proxy
+            .wasi_http_incoming_handler()
+            .call_handle(&mut store, request, out)
+            .await?;
+        let response = receiver
+            .await?
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert_eq!(response.status().as_u16(), status, "{path}");
+        if status == 201 {
+            assert_eq!(response.headers()["content-type"], "text/plain");
+            // `Headers` cannot be enumerated, so only well-known names are sent.
+            assert!(!response.headers().contains_key("x-unlisted"));
+        }
+        let body = response.into_body().collect().await?.to_bytes();
+        assert_eq!(std::str::from_utf8(&body)?, expected, "{path}");
+    }
+    Ok(())
+}
