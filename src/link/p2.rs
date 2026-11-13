@@ -123,6 +123,50 @@ pub(super) fn external(module: &str) -> Cow<'_, str> {
     }
 }
 
+/// In a component that mixes WASI generations, bind each runtime import of a WASI 0.3
+/// interface the world lacks to the WASI 0.2 interface it imports instead. Code generation
+/// admits only functions with the same synchronous signature in both generations.
+pub(crate) fn fallback(core: &[u8], interfaces: &[String]) -> anyhow::Result<Vec<u8>> {
+    use wasm_encoder::reencode::{Error, Reencode};
+    struct Fallback<'a>(&'a [String]);
+    impl Reencode for Fallback<'_> {
+        type Error = std::convert::Infallible;
+        fn parse_import_section(
+            &mut self,
+            section: &mut wasm_encoder::ImportSection,
+            reader: wasmparser::ImportSectionReader<'_>,
+        ) -> Result<(), Error<Self::Error>> {
+            for import in reader.into_imports() {
+                let import = import?;
+                let mut module: &str = import.module;
+                if !self.0.iter().any(|name| name == module) {
+                    let pinned = external(module);
+                    if let Some(base) = pinned.strip_suffix("@0.2.12")
+                        && pinned.as_ref() != module
+                        && let Some(name) = self
+                            .0
+                            .iter()
+                            .find(|name| name.starts_with(&format!("{base}@0.2.")))
+                    {
+                        module = name;
+                    }
+                }
+                section.import(module, import.name, self.entity_type(import.ty)?);
+            }
+            Ok(())
+        }
+    }
+    if !interfaces
+        .iter()
+        .any(|name| name.starts_with("wasi:") && name.contains("@0.2."))
+    {
+        return Ok(core.to_vec());
+    }
+    let mut module = wasm_encoder::Module::new();
+    Fallback(interfaces).parse_core_module(&mut module, wasmparser::Parser::new(0), core)?;
+    Ok(module.finish())
+}
+
 /// The bindings use pinned P2 WIT; honor an authored compatible 0.2 patch version.
 pub(crate) fn versions(core: &[u8], interfaces: &[String]) -> anyhow::Result<Vec<u8>> {
     use wasm_encoder::reencode::{Error, Reencode};

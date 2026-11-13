@@ -49,7 +49,7 @@ export async function run(x:number):Promise<{value:number,trace:number[]}> {
         .into(),
     );
     let mixed = Case::P2 {
-        source: "export async function run(x:number):Promise<{value:number,trace:number[]}>{return {value:x,trace:[]};}"
+        source: "import {setTimeout} from 'node:timers/promises'; export async function run(x:number):Promise<{value:number,trace:number[]}>{await setTimeout(1);return {value:x,trace:[]};}"
             .into(),
         wit: WIT
             .replace(
@@ -57,7 +57,7 @@ export async function run(x:number):Promise<{value:number,trace:number[]}> {
                 "world generated { include wasi:cli/imports@0.2.12;",
             )
             .replace("export run: func", "export run: async func"),
-        diagnostic: Some("a P2 world cannot mix".into()),
+        diagnostic: Some("setTimeout cannot wait on wasi:clocks/monotonic-clock@0.2.12".into()),
     };
     let missing_poll = Case::P2 {
         source: "export async function run(x:number):Promise<{value:number,trace:number[]}>{return {value:x,trace:[]};}"
@@ -92,9 +92,9 @@ export async function run(x:number):Promise<{value:number,trace:number[]}> {
             check_equivalence,
         ),
         Contract::new(
-            "wasi.p2.reject_mixed_abi",
+            "wasi.p2.reject_mixed_wait",
             vec![Witness {
-                partition: "p2-imports-p3-export",
+                partition: "p2-timer-p3-export",
                 case: mixed.clone(),
             }],
             Just(mixed).boxed(),

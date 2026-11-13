@@ -194,8 +194,11 @@ pub(super) fn emit_component(
     let streams = bind::stream_anchor(resolve, world);
     let (mut has_stdout, mut stderr) = (false, false);
     for name in &imports {
-        has_stdout |= name.starts_with("wasi:cli/stdout@");
-        stderr |= name.starts_with("wasi:cli/stderr@");
+        // A P3 component writes only to WASI 0.3 output streams, even when its world also
+        // imports the WASI 0.2 ones.
+        let usable = p2 || name.contains("@0.3.");
+        has_stdout |= usable && name.starts_with("wasi:cli/stdout@");
+        stderr |= usable && name.starts_with("wasi:cli/stderr@");
     }
     let stdout = has_stdout && uses_stdout(ctx, mir);
     let exports = Exports::Canonical {
@@ -214,9 +217,11 @@ pub(super) fn emit_component(
         &link::canonical::Requirements::for_world(resolve, world),
         p2,
     )?;
-    if p2 {
-        core = link::p2::versions(&core, &bind::imports(resolve, world))?;
-    }
+    core = if p2 {
+        link::p2::versions(&core, &bind::imports(resolve, world))?
+    } else {
+        link::p2::fallback(&core, &bind::imports(resolve, world))?
+    };
     if strip_unused_stdio {
         core = link::raw::available_stdio(core, stdout, stderr)?;
     }

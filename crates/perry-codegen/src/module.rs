@@ -179,6 +179,29 @@ impl ModuleState<'_> {
             .as_ref()
             .is_none_or(|imports| imports.contains(interface))
     }
+
+    /// The WASI 0.2 interface the world imports in place of the WASI 0.3 `interface`.
+    /// A component that mixes generations uses the P3 ABI and may import only this one.
+    pub(crate) fn p2_counterpart(&self, interface: &str) -> Option<&str> {
+        let base = interface.strip_suffix("@0.3.0")?;
+        let base = match base {
+            "wasi:http/client" => "wasi:http/outgoing-handler",
+            "wasi:clocks/system-clock" => "wasi:clocks/wall-clock",
+            other => other,
+        };
+        let prefix = format!("{base}@0.2.");
+        self.imports
+            .as_ref()?
+            .iter()
+            .copied()
+            .find(|name| name.starts_with(&prefix))
+    }
+
+    /// Whether a runtime service that never waits can bind `interface`, or its WASI 0.2
+    /// counterpart: both generations give these functions the same synchronous signature.
+    pub(crate) fn can_import_sync(&self, interface: &str) -> bool {
+        self.can_import(interface) || self.p2_counterpart(interface).is_some()
+    }
 }
 
 /// Lower canonicalized MIR (after `perry_mir::canonicalize`) to the `wasm` dialect.

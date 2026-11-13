@@ -338,16 +338,100 @@ export async function run(url: string): Promise<string> {
     Ok(())
 }
 
-#[test]
-fn mixed_component_abis_are_rejected() {
+/// Compile a world that mixes WASI 0.2 with native async and instantiate it on a host that
+/// provides both WASI 0.2 and WASI 0.3.
+async fn mixed(wit: &str, source: &str, host: Host) -> Result<(Store<Host>, Instance)> {
+    let bytes = Compiler::MemoryChecked.component(wit, "test", "mixed.ts", source)?;
+    let mut config = Config::new();
+    config.wasm_component_model_async(true);
+    let engine = Engine::new(&config)?;
+    let component = Component::new(&engine, &bytes)?;
+    let mut linker = Linker::new(&engine);
+    wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
+    wasmtime_wasi::p3::add_to_linker(&mut linker)?;
+    let mut store = wasi_host::store(&engine, host);
+    let instance = linker.instantiate_async(&mut store, &component).await?;
+    Ok((store, instance))
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_p2_import_set_can_carry_an_async_export() -> Result<()> {
     let wit = "package test:mixed; world test { include wasi:cli/imports@0.2.12; export run: async func() -> u32; }";
-    let error = Compiler::Standard
-        .component(
-            wit,
-            "test",
-            "mixed.ts",
-            "export async function run() { return 1; }",
-        )
-        .unwrap_err();
-    assert!(error.to_string().contains("cannot mix"), "{error:#}");
+    let host = Host::new(WasiCtx::builder().build());
+    let (mut store, instance) =
+        mixed(wit, "export async function run() { return 1; }", host).await?;
+    let run = instance.get_typed_func::<(), (u32,)>(&mut store, "run")?;
+    assert_eq!(run.call_async(&mut store, ()).await?.0, 1);
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn p2_and_p3_interfaces_are_called_from_one_component() -> Result<()> {
+    let wit = r#"
+package test:mixed;
+world test {
+  import wasi:random/random@0.2.12;
+  import wasi:clocks/monotonic-clock@0.3.0;
+  import wasi:cli/stderr@0.3.0;
+  export run: async func(text: string) -> string;
+  export sync: func() -> bool;
+}
+"#;
+    let source = r#"
+import { setTimeout } from 'node:timers/promises';
+import { getRandomU64 } from 'wasi:random/random@0.2.12';
+export function sync(): boolean { return getRandomU64() !== getRandomU64(); }
+export async function run(text: string): Promise<string> {
+  const first = getRandomU64();
+  await setTimeout(1);
+  return first !== getRandomU64() ? text + '!' : text;
+}
+"#;
+    let host = Host::new(WasiCtx::builder().build());
+    let (mut store, instance) = mixed(wit, source, host).await?;
+    let run = instance.get_typed_func::<(&str,), (String,)>(&mut store, "run")?;
+    assert_eq!(run.call_async(&mut store, ("mixed",)).await?.0, "mixed!");
+    let sync = instance.get_typed_func::<(), (bool,)>(&mut store, "sync")?;
+    assert!(sync.call_async(&mut store, ()).await?.0);
+    Ok(())
+}
+
+const MIXED: &str = "package test:mixed; world test { include wasi:cli/imports@0.2.12; export run: async func(text: string) -> string; }";
+
+#[tokio::test(flavor = "current_thread")]
+async fn services_that_never_wait_bind_p2_interfaces_in_a_mixed_world() -> Result<()> {
+    let source = r#"
+export async function run(text: string): Promise<string> {
+  const value = process.env['MIXED'] ?? 'unset';
+  return text + value
+    + (Date.now() > 1e12 ? 'D' : 'd')
+    + (performance.now() >= 0 ? 'P' : 'p')
+    + (Math.random() < 1 ? 'R' : 'r')
+    + crypto.randomUUID().length.toString();
+}
+"#;
+    let host = Host::new(WasiCtx::builder().env("MIXED", "yes").build());
+    let (mut store, instance) = mixed(MIXED, source, host).await?;
+    let run = instance.get_typed_func::<(&str,), (String,)>(&mut store, "run")?;
+    assert_eq!(run.call_async(&mut store, ("p2:",)).await?.0, "p2:yesDPR36");
+    Ok(())
+}
+
+#[test]
+fn waiting_services_name_the_p3_interface_a_mixed_world_lacks() {
+    for (source, expected) in [
+        (
+            "import { setTimeout } from 'node:timers/promises';\nexport async function run(text: string) { await setTimeout(1); return text; }",
+            "setTimeout cannot wait on wasi:clocks/monotonic-clock@0.2.12",
+        ),
+        (
+            "export async function run(text: string) { console.log(text); return text; }",
+            "console output cannot wait on wasi:cli/stdout@0.2.12",
+        ),
+    ] {
+        let error = Compiler::Standard
+            .component(MIXED, "test", "mixed.ts", source)
+            .unwrap_err();
+        assert!(format!("{error:#}").contains(expected), "{error:#}");
+    }
 }

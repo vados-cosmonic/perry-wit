@@ -48,8 +48,20 @@ The handbook's Authoring chapter covers commands, HTTP handlers and the project 
 
 The selected WIT world determines the target. WASI `@0.2.x` interfaces select P2;
 WASI `@0.3.x`, WIT `async` functions, futures or streams select P3. A world with
-only synchronous custom interfaces also uses P2. Mixing the two WASI generations
-in one world is rejected. Existing P3 worlds keep their native asynchronous ABI.
+only synchronous custom interfaces also uses P2. Existing P3 worlds keep their
+native asynchronous ABI.
+
+A world may mix the two generations. Any WASI `@0.3.x` interface, `async`
+function, future or stream makes the component a P3 component, and its WASI
+`@0.2.x` interfaces are ordinary synchronous imports and exports that TypeScript
+calls like any other WIT interface. In such a component:
+
+- `process.env`, `Date.now()`, `performance.now()`, `Math.random()` and
+  `crypto` use the WASI 0.3 interface when the world imports it, and the
+  WASI 0.2 one otherwise.
+- Services that wait (console output, timers, `fetch` and `node:fs`) need their
+  WASI 0.3 interface. A P3 component cannot wait on WASI 0.2 pollables, so the
+  compiler reports the interface to import.
 
 For example, a P2 component can implement a synchronous WIT export with an async
 TypeScript function:

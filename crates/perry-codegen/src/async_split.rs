@@ -417,11 +417,15 @@ impl FunctionLowering<'_, '_> {
     /// `setTimeout(delay, value)`: an async-lowered `wait-for` whose completion settles the
     /// promise with `value`.
     pub(crate) fn lower_timer(&mut self, ctx: &mut Context, op: Ptr<Operation>) -> Result<()> {
-        anyhow::ensure!(
-            self.state.can_import(crate::MONOTONIC_CLOCK),
-            "setTimeout needs the WIT world to import {}",
-            crate::MONOTONIC_CLOCK
-        );
+        if !self.state.can_import(crate::MONOTONIC_CLOCK) {
+            let clock = crate::MONOTONIC_CLOCK;
+            if let Some(p2) = self.state.p2_counterpart(clock) {
+                anyhow::bail!(
+                    "setTimeout needs the WIT world to import {clock}: the world mixes WASI 0.2 with native async, and setTimeout cannot wait on {p2} in such a component"
+                );
+            }
+            anyhow::bail!("setTimeout needs the WIT world to import {clock}");
+        }
         let delay = self.operand(ctx, op, 0)?;
         let value = op.deref(ctx).get_operand(1);
         // Node waits at least 1 ms; NaN and smaller delays become 1 ms.

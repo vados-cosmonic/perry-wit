@@ -99,11 +99,11 @@ pub(crate) static ENTRIES: &[CatalogEntry] = &[
         expected_outcomes: &[ExpectedOutcome::EquivalentExecution],
     },
     CatalogEntry {
-        id: "wasi.p2.reject_mixed_abi",
-        description: "A selected world cannot combine P2 WASI with P3 async exports",
+        id: "wasi.p2.reject_mixed_wait",
+        description: "A world mixing P2 WASI with P3 async exports is a P3 component, whose waiting services need WASI 0.3 interfaces",
         specification: "https://github.com/WebAssembly/component-model",
-        domain: "A synchronous P2 import set with an asynchronous WIT export",
-        partitions: &["p2-imports-p3-export"],
+        domain: "A timer awaited behind an asynchronous WIT export whose world imports only the P2 monotonic clock",
+        partitions: &["p2-timer-p3-export"],
         expected_outcomes: &[ExpectedOutcome::CompilerRejection],
     },
     CatalogEntry {

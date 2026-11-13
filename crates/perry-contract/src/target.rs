@@ -13,7 +13,6 @@ pub fn for_world(resolve: &Resolve, world: WorldId) -> Result<Target, String> {
 }
 
 pub fn for_definition(resolve: &Resolve, world: &World) -> Result<Target, String> {
-    let mut p2 = false;
     let mut p3 = false;
     let mut visited = HashSet::new();
     for item in world.imports.values().chain(world.exports.values()) {
@@ -29,7 +28,6 @@ pub fn for_definition(resolve: &Resolve, world: &World) -> Result<Target, String
                 if name.namespace == "wasi"
                     && let Some(version) = &name.version
                 {
-                    p2 |= version.major == 0 && version.minor == 2;
                     p3 |= version.major == 0 && version.minor == 3;
                 }
             }
@@ -39,9 +37,8 @@ pub fn for_definition(resolve: &Resolve, world: &World) -> Result<Target, String
         p3 |= entry.function.kind.is_async()
             || !entry.function.find_futures_and_streams(resolve).is_empty();
     }
-    if p2 && p3 {
-        return Err("a P2 world cannot mix WASI 0.2 interfaces with WASI 0.3, async functions, streams, or futures; select one component ABI".into());
-    }
+    // A world may mix both generations: any native async construct selects the P3 ABI for
+    // the component, where WASI 0.2 interfaces are ordinary synchronous imports and exports.
     Ok(if p3 { Target::P3 } else { Target::P2 })
 }
 
@@ -88,5 +85,16 @@ mod tests {
             ),
             Ok(Target::P3)
         );
+    }
+
+    #[test]
+    fn native_async_selects_p3_for_a_world_that_also_uses_wasi_p2() {
+        let wasi = "package wasi:demo@0.2.0; interface values { get: func() -> u32; }";
+        let world = "package test:target; world test { import wasi:demo/values@0.2.0; export run: async func(); }";
+        let mut resolve = Resolve::default();
+        resolve.push_str("wasi.wit", wasi).unwrap();
+        let package = resolve.push_str("test.wit", world).unwrap();
+        let world = resolve.select_world(&[package], Some("test")).unwrap();
+        assert_eq!(for_world(&resolve, world), Ok(Target::P3));
     }
 }
