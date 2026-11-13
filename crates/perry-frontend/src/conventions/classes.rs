@@ -27,12 +27,14 @@ use swc_ecma_visit::{VisitMut, VisitMutWith};
 const DISPOSE: &str = "__dispose";
 
 pub(super) struct Classes<'a> {
-    world: &'a World,
+    pub(super) world: &'a World,
     foreign: &'a HashMap<String, Foreign>,
     /// Whether any source mentions a member name: unused methods are not generated.
     used: Box<dyn Fn(&str) -> bool + 'a>,
     /// Generated helper functions, wrappers and exports.
-    code: String,
+    pub(super) code: String,
+    /// The source's class implementing each exported resource.
+    pub(super) implemented: Vec<Option<String>>,
     /// Aliases of the imported functions the generated code calls, by module and name.
     raw: HashMap<(String, String), String>,
     /// Conversion helpers by raw type and direction.
@@ -40,7 +42,7 @@ pub(super) struct Classes<'a> {
     /// Resources whose class is needed, and whether it is generated yet.
     needed: Vec<Option<bool>>,
     /// Source names of resources, renamed to their classes.
-    renamed: HashMap<String, String>,
+    pub(super) renamed: HashMap<String, String>,
 }
 
 /// Whether the entry module imports a resource as a value, to construct it or call its
@@ -85,6 +87,7 @@ impl<'a> Classes<'a> {
             foreign,
             used: Box::new(used),
             code: String::new(),
+            implemented: vec![None; world.exported.len()],
             raw: HashMap::new(),
             conversions: HashMap::new(),
             needed: vec![None; world.resources.len()],
@@ -97,6 +100,10 @@ impl<'a> Classes<'a> {
     pub(super) fn source_type(&mut self, ty: &Typed) -> String {
         match &ty.shape {
             Shape::Plain => ty.raw.clone(),
+            // A resource the source implements no class for stays an opaque handle.
+            Shape::Exported { resource, .. } => self.implemented[*resource]
+                .clone()
+                .unwrap_or_else(|| ty.raw.clone()),
             Shape::Resource(index) => {
                 self.needed[*index].get_or_insert(false);
                 self.world.resources[*index].class.clone()
@@ -140,7 +147,7 @@ impl<'a> Classes<'a> {
 
     /// `expression` converted between the compiler's representation and the source's:
     /// `out` is from an import's result or an export's parameter towards the source.
-    fn converted(&mut self, ty: &Typed, out: bool, expression: &str) -> String {
+    pub(super) fn converted(&mut self, ty: &Typed, out: bool, expression: &str) -> String {
         match self.conversion(ty, out) {
             Some(function) => format!("{function}({expression})"),
             None => expression.to_owned(),
@@ -152,7 +159,7 @@ impl<'a> Classes<'a> {
         if ty.shape == Shape::Plain {
             return None;
         }
-        let key = (ty.raw.clone(), out);
+        let key = (format!("{} {:?}", ty.raw, ty.shape), out);
         if let Some(name) = self.conversions.get(&key) {
             return Some(name.clone());
         }
@@ -167,6 +174,34 @@ impl<'a> Classes<'a> {
         };
         let body = match &ty.shape {
             Shape::Plain => unreachable!("plain values need no conversion"),
+            Shape::Exported { resource, owned } => {
+                let exported = &self.world.exported[*resource];
+                let table = format!("__jco_tbl{resource}");
+                let implemented = self.implemented[*resource].is_some();
+                let helper = |classes: &mut Self, name: &str| {
+                    implemented
+                        .then(|| classes.raw(&exported.module, name))
+                        .flatten()
+                };
+                let body = if !out {
+                    helper(self, &exported.create)
+                        .map(|create| format!("return {create}(__jco_reg{resource}(v));"))
+                } else if *owned {
+                    // The handle passed in is consumed: its destructor finds no instance
+                    // left to dispose.
+                    helper(self, &exported.representation)
+                        .zip(helper(self, &exported.drop))
+                        .map(|(representation, drop)| {
+                            format!(
+                                "const r = {representation}(v); const x = {table}.get(r)!; {table}.delete(r); {drop}(v); return x;"
+                            )
+                        })
+                } else {
+                    helper(self, &exported.representation)
+                        .map(|representation| format!("return {table}.get({representation}(v))!;"))
+                };
+                body.unwrap_or_else(|| "return v;".to_owned())
+            }
             Shape::Resource(index) => {
                 if out {
                     format!("return new {}(v);", self.world.resources[*index].class)
@@ -263,7 +298,7 @@ impl<'a> Classes<'a> {
     }
 
     /// The generated code's name for an imported function, when the compiler binds it.
-    fn raw(&mut self, module: &str, binding: &str) -> Option<String> {
+    pub(super) fn raw(&mut self, module: &str, binding: &str) -> Option<String> {
         if !self.foreign.contains_key(&format!("{module}#{binding}")) {
             return None;
         }
@@ -402,15 +437,20 @@ impl<'a> Classes<'a> {
     }
 
     /// An exported function that converts its arguments, calls the source's `inner`
-    /// implementation and converts the result back.
+    /// implementation and converts the result back. A method's `receiver` is declared
+    /// first, as `self`.
     pub(super) fn export(
         &mut self,
         export: &super::ExportedFunction,
+        receiver: Option<&str>,
         inner: &str,
         params: usize,
         is_async: bool,
     ) {
-        let mut declared = Vec::new();
+        let mut declared: Vec<String> = receiver
+            .into_iter()
+            .map(|ty| format!("self: {ty}"))
+            .collect();
         let mut arguments = Vec::new();
         for (index, param) in export.params.iter().enumerate() {
             declared.push(format!("p{index}: {}", param.raw));

@@ -377,6 +377,28 @@ pub(crate) fn exports(
             });
         }
     }
+    // A resource's destructor is not a WIT function. The component calls it, when the
+    // module exports it, with the representation of each dropped resource.
+    for (key, item) in &world.exports {
+        let WorldItem::Interface { id, .. } = item else {
+            continue;
+        };
+        for (name, id) in &resolve.interfaces[*id].types {
+            if !matches!(resolve.types[*id].kind, TypeDefKind::Resource) {
+                continue;
+            }
+            let implementation = perry_contract::export_names::destructor_name(resolve, key, name);
+            if exported.remove(&implementation).is_some() {
+                bound.push(Export {
+                    core_name: format!("{}#[dtor]{name}", resolve.name_world_key(key)),
+                    function: implementation,
+                    params: vec![AbiType::U32],
+                    result: None,
+                    kind: ExportKind::Sync,
+                });
+            }
+        }
+    }
     // Exported functions outside the selected world stay internal.
     Ok(bound)
 }

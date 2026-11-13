@@ -408,6 +408,101 @@ fn resource_classes_are_disposed_by_using_and_symbol_dispose() -> Result<()> {
     Ok(())
 }
 
+/// A class named in an interface's export object implements the interface's resource.
+#[test]
+fn a_class_implements_an_exported_resource() -> Result<()> {
+    use wasmtime::component::{Component, Linker, ResourceAny};
+    let wit = "package test:conventions;
+interface counters {
+  resource counter {
+    constructor(start: u32);
+    get: func() -> u32;
+    increment: func();
+    twin: func() -> counter;
+    make: static func(start: u32) -> counter;
+  }
+  take: func(c: counter) -> u32;
+  peek: func(c: borrow<counter>) -> u32;
+  live: func() -> u32;
+}
+world test { export counters; }";
+    let source = "let live = 0;
+class Counter {
+  #value;
+  constructor(start) { this.#value = start; live += 1; }
+  get() { return this.#value; }
+  increment() { this.#value += 1; }
+  twin() { return new Counter(this.#value); }
+  static make(start) { return new Counter(start * 10); }
+  [Symbol.dispose]() { live -= 1; }
+}
+export const counters = {
+  Counter,
+  take(c) { return c.get(); },
+  peek(c) { return c.get(); },
+  live() { return live; },
+};";
+    let engine = Engine::default();
+    let component = Component::new(
+        &engine,
+        Compiler::Standard.component(wit, "test", "counters.js", source)?,
+    )?;
+    let mut store = Store::new(&engine, ());
+    let instance = Linker::<()>::new(&engine).instantiate(&mut store, &component)?;
+    let (counter,): (ResourceAny,) = call(
+        &mut store,
+        &instance,
+        "counters",
+        "[constructor]counter",
+        (3u32,),
+    )?;
+    call::<_, ()>(
+        &mut store,
+        &instance,
+        "counters",
+        "[method]counter.increment",
+        (counter,),
+    )?;
+    let (value,): (u32,) = call(
+        &mut store,
+        &instance,
+        "counters",
+        "[method]counter.get",
+        (counter,),
+    )?;
+    assert_eq!(value, 4);
+    let (twin,): (ResourceAny,) = call(
+        &mut store,
+        &instance,
+        "counters",
+        "[method]counter.twin",
+        (counter,),
+    )?;
+    let (made,): (ResourceAny,) = call(
+        &mut store,
+        &instance,
+        "counters",
+        "[static]counter.make",
+        (2u32,),
+    )?;
+    let (peeked,): (u32,) = call(&mut store, &instance, "counters", "peek", (twin,))?;
+    assert_eq!(peeked, 4);
+    let live = |store: &mut Store<()>| -> Result<u32> {
+        let (live,): (u32,) = call(store, &instance, "counters", "live", ())?;
+        Ok(live)
+    };
+    assert_eq!(live(&mut store)?, 3);
+    // Dropping a handle disposes its instance; an owned argument is consumed undisposed.
+    twin.resource_drop(&mut store)?;
+    assert_eq!(live(&mut store)?, 2);
+    let (taken,): (u32,) = call(&mut store, &instance, "counters", "take", (made,))?;
+    assert_eq!(taken, 20);
+    assert_eq!(live(&mut store)?, 2);
+    counter.resource_drop(&mut store)?;
+    assert_eq!(live(&mut store)?, 1);
+    Ok(())
+}
+
 /// Resources cross the export boundary as class instances too.
 #[test]
 fn exports_take_and_return_resource_classes() -> Result<()> {

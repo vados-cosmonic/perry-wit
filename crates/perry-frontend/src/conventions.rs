@@ -14,8 +14,10 @@
 //! Such components are often plain JavaScript. The world already states each export's
 //! signature, so parameters and return types the source leaves out are taken from it.
 //!
-//! They also use imported resources as classes, which [classes] generates.
+//! They also use imported resources as classes, which [classes] generates, and implement
+//! exported resources as classes, which [exported] binds.
 mod classes;
+mod exported;
 
 use anyhow::Result;
 use perry_parser::swc_ecma_ast as ast;
@@ -41,6 +43,10 @@ pub struct ExportedFunction {
     /// Whether the source's own return type decides how the result is produced, as for a
     /// WIT `result` or `option`.
     pub open: bool,
+    /// Whether the function belongs to a resource of [World::exported].
+    pub role: Role,
+    /// A method's receiver, which is its first WIT parameter.
+    pub receiver: Option<Typed>,
 }
 
 /// A WIT type in the compiler's TypeScript spelling, and where a source written against
@@ -72,6 +78,12 @@ pub enum Shape {
     Plain,
     /// An imported resource, by index into [World::resources].
     Resource(usize),
+    /// A resource this component exports, by index into [World::exported]. An owned handle
+    /// passed to an export is consumed.
+    Exported {
+        resource: usize,
+        owned: bool,
+    },
     List(Box<Typed>),
     Option(Box<Typed>),
     Tuple(Vec<Typed>),
@@ -98,8 +110,27 @@ pub struct ImportedResource {
     pub names: Vec<(String, String)>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// A resource an exported interface declares, which a source implements as a class.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExportedResource {
+    /// The export object holding the class, and the property naming it.
+    pub object: String,
+    pub name: String,
+    /// The opaque handle type.
+    pub handle: String,
+    /// The module declaring the helpers that create a handle around a representation,
+    /// read the representation back and drop a handle.
+    pub module: String,
+    pub create: String,
+    pub representation: String,
+    pub drop: String,
+    /// The exported function the component calls when a handle is dropped.
+    pub destructor: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum Role {
+    #[default]
     Function,
     Constructor(usize),
     Method(usize),
@@ -127,6 +158,7 @@ pub struct World {
     pub exports: Vec<ExportedFunction>,
     pub imports: Vec<ImportedFunction>,
     pub resources: Vec<ImportedResource>,
+    pub exported: Vec<ExportedResource>,
 }
 
 /// Where an export object is declared in the entry module.
@@ -400,7 +432,8 @@ fn flatten_object(
     object: &str,
     site: ObjectSite,
     implementations: &HashMap<&str, &str>,
-) -> Result<()> {
+    resources: &HashMap<&str, usize>,
+) -> Result<Vec<(usize, String)>> {
     let ObjectSite {
         item,
         declarator,
@@ -416,6 +449,9 @@ fn flatten_object(
     // Properties outside the world stay reachable through `object.member` as internals.
     let mut names = HashMap::new();
     let mut properties = Vec::new();
+    // The class implementing each exported resource the object names.
+    let mut classes = Vec::new();
+    let mut hoisted = Vec::new();
     for property in literal.props {
         let ast::PropOrSpread::Prop(property) = property else {
             return Err(source.error(
@@ -447,6 +483,33 @@ fn flatten_object(
                 ));
             }
         };
+        if let Some(resource) = resources.get(name.as_str()) {
+            let class = match value {
+                ast::Expr::Ident(class) => class.sym.to_string(),
+                ast::Expr::Class(class) => {
+                    let name = format!("__jco_{object}_{name}");
+                    hoisted.push(ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Class(
+                        ast::ClassDecl {
+                            ident: ident(&name, key_span),
+                            declare: false,
+                            class: class.class,
+                        },
+                    ))));
+                    name
+                }
+                _ => {
+                    return Err(source.error(
+                        key_span,
+                        format!(
+                            "Component export '{object}.{name}' is a resource: it needs a class or the name of a class declaration"
+                        ),
+                    ));
+                }
+            };
+            names.insert(name, class.clone());
+            classes.push((*resource, class));
+            continue;
+        }
         let target = implementations.get(name.as_str()).map_or_else(
             || format!("__jco_{object}_{name}"),
             |name| (*name).to_owned(),
@@ -455,7 +518,7 @@ fn flatten_object(
         properties.push((name, target, value, key_span));
     }
 
-    let mut generated = Vec::new();
+    let mut generated = hoisted;
     let mut aliases = Vec::new();
     for (name, target, value, key_span) in properties {
         let exported = implementations.contains_key(name.as_str());
@@ -536,7 +599,7 @@ fn flatten_object(
         names: &names,
         this: false,
     });
-    Ok(())
+    Ok(classes)
 }
 
 /// Rewrite `export const run = () => { ... }` into `export function run() { ... }`.
@@ -628,7 +691,7 @@ fn annotations(types: &[String]) -> Option<Vec<Option<Box<ast::TsTypeAnn>>>> {
 /// Give an export's implementation the types of its WIT signature where it declares none.
 fn annotate(
     source: &Source<'_>,
-    name: &ast::Ident,
+    name: Span,
     function: &mut ast::Function,
     export: &ExportedFunction,
     params: &[String],
@@ -638,7 +701,7 @@ fn annotate(
         let count =
             |count: usize| format!("{count} parameter{}", if count == 1 { "" } else { "s" });
         return Err(source.error(
-            name.span,
+            name,
             format!(
                 "Component export '{}' declares {}, but its WIT function takes {}",
                 export.implementation,
@@ -664,8 +727,20 @@ fn annotate(
     if result.is_some() {
         function.return_type = types.pop().flatten();
     }
-    for (param, ty) in function.params.iter_mut().zip(types) {
-        let declared = match &mut param.pat {
+    annotate_params(
+        function.params.iter_mut().map(|param| &mut param.pat),
+        types,
+    );
+    Ok(())
+}
+
+/// Give each parameter that declares no type the next of `types`.
+fn annotate_params<'a>(
+    params: impl Iterator<Item = &'a mut ast::Pat>,
+    types: Vec<Option<Box<ast::TsTypeAnn>>>,
+) {
+    for (param, ty) in params.zip(types) {
+        let declared = match param {
             ast::Pat::Ident(binding) => &mut binding.type_ann,
             ast::Pat::Array(pattern) => &mut pattern.type_ann,
             ast::Pat::Object(pattern) => &mut pattern.type_ann,
@@ -679,7 +754,6 @@ fn annotate(
             *declared = ty;
         }
     }
-    Ok(())
 }
 
 /// Whether an export's values differ between the compiler's representation and the
@@ -738,7 +812,11 @@ fn annotate_exports(
                 ..
             })) => match by_name.get(function.ident.sym.as_ref()) {
                 Some(export) => (function, *export, true),
-                None => continue,
+                // `export function f` that an export object also names.
+                None => match locals.get(function.ident.sym.as_ref()) {
+                    Some(export) => (function, *export, false),
+                    None => continue,
+                },
             },
             ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Fn(function))) => {
                 match locals.get(function.ident.sym.as_ref()) {
@@ -751,7 +829,11 @@ fn annotate_exports(
         let result = |text: Option<String>| {
             (!export.open).then(|| text.unwrap_or_else(|| "void".to_owned()))
         };
-        match classes.as_deref_mut().filter(|_| converts(export)) {
+        // A resource's function written as an exported function takes opaque handles.
+        match classes
+            .as_deref_mut()
+            .filter(|_| export.role == Role::Function && converts(export))
+        {
             Some(classes) => {
                 let params: Vec<_> = export
                     .params
@@ -761,7 +843,7 @@ fn annotate_exports(
                 let returned = export.result.as_ref().map(|ty| classes.source_type(ty));
                 annotate(
                     source,
-                    &function.ident,
+                    function.ident.span,
                     &mut function.function,
                     export,
                     &params,
@@ -777,17 +859,23 @@ fn annotate_exports(
                 };
                 classes.export(
                     export,
+                    None,
                     &inner,
                     function.function.params.len(),
                     function.function.is_async,
                 );
             }
             None => {
-                let params: Vec<_> = export.params.iter().map(|ty| ty.raw.clone()).collect();
+                let params: Vec<_> = export
+                    .receiver
+                    .iter()
+                    .chain(&export.params)
+                    .map(|ty| ty.raw.clone())
+                    .collect();
                 let returned = export.result.as_ref().map(|ty| ty.raw.clone());
                 annotate(
                     source,
-                    &function.ident,
+                    function.ident.span,
                     &mut function.function,
                     export,
                     &params,
@@ -837,17 +925,39 @@ pub(crate) fn apply(
             objects.push(object);
         }
     }
+    for resource in &world.exported {
+        if !objects.contains(&resource.object.as_str()) {
+            objects.push(&resource.object);
+        }
+    }
     let mut flattened = false;
+    let mut implemented = Vec::new();
     for object in objects {
         let Some(site) = find_object(module, object) else {
             continue;
         };
         let implementations = exports
             .iter()
-            .filter(|export| export.object.as_deref() == Some(object))
+            .filter(|export| {
+                export.object.as_deref() == Some(object) && export.role == Role::Function
+            })
             .map(|export| (export.member.as_str(), export.implementation.as_str()))
             .collect();
-        flatten_object(module, &source, object, site, &implementations)?;
+        let resources = world
+            .exported
+            .iter()
+            .enumerate()
+            .filter(|(_, resource)| resource.object == object)
+            .map(|(index, resource)| (resource.name.as_str(), index))
+            .collect();
+        implemented.extend(flatten_object(
+            module,
+            &source,
+            object,
+            site,
+            &implementations,
+            &resources,
+        )?);
         flattened = true;
     }
     let names = exports
@@ -862,6 +972,7 @@ pub(crate) fn apply(
     let used = |name: &str| text.contains(name) || sources.values().any(|text| text.contains(name));
     let mut classes = classes::Classes::new(world, foreign, used);
     classes.bind_imports(module);
+    classes.bind_exported(module, &source, &implemented)?;
     annotate_exports(module, &source, world, Some(&mut classes))?;
     classes.finish(module)
 }
@@ -889,6 +1000,8 @@ mod tests {
                     params: vec![plain("number"), plain("Array<string>")],
                     result: Some(plain("string")),
                     open: false,
+                    role: Role::Function,
+                    receiver: None,
                 })
                 .collect(),
             ..World::default()
@@ -1113,6 +1226,8 @@ mod tests {
                 params: vec![],
                 result: Some(plain("string")),
                 open: false,
+                role: Role::Function,
+                receiver: None,
             }],
             imports: vec![
                 function(
@@ -1144,6 +1259,7 @@ mod tests {
                 drop: "dropExample".into(),
                 names: vec![("t:t/res".into(), "Example".into())],
             }],
+            exported: vec![],
         };
         let foreign = [
             "ConstructorExample",
@@ -1163,11 +1279,19 @@ mod tests {
     /// Top-level names the pass leaves in the module, and the names its imports bind.
     fn declared(source: &str) -> Result<(Vec<String>, Vec<String>)> {
         let (world, foreign) = resource_world();
+        declared_in(&world, &foreign, source)
+    }
+
+    fn declared_in(
+        world: &World,
+        foreign: &HashMap<String, crate::hir::Foreign>,
+        source: &str,
+    ) -> Result<(Vec<String>, Vec<String>)> {
         let mut module = crate::hir_compat::parse(source, "main.ts")?;
         apply(
             &mut module,
-            &world,
-            &foreign,
+            world,
+            foreign,
             &BTreeMap::new(),
             source,
             "main.ts",
@@ -1190,10 +1314,23 @@ mod tests {
                 ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Class(class))) => {
                     names.push(format!("class {}", class.ident.sym));
                     for member in &class.class.body {
-                        if let ast::ClassMember::Method(method) = member
-                            && let ast::PropName::Ident(name) = &method.key
-                        {
-                            names.push(format!("  {}", name.sym));
+                        match member {
+                            ast::ClassMember::Method(method) => {
+                                if let ast::PropName::Ident(name) = &method.key {
+                                    names.push(format!("  {}", name.sym));
+                                }
+                            }
+                            ast::ClassMember::ClassProp(property) => {
+                                if let ast::PropName::Ident(name) = &property.key {
+                                    let typed = if property.type_ann.is_some() {
+                                        "typed "
+                                    } else {
+                                        ""
+                                    };
+                                    names.push(format!("  {typed}field {}", name.sym));
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -1226,6 +1363,7 @@ mod tests {
                 "__jco_out0",
                 "find",
                 "class __jco_TTResExample",
+                "  typed field __h",
                 "  hello",
                 "  make",
                 "  __dispose",
@@ -1246,6 +1384,127 @@ mod tests {
             ]
         );
         Ok(())
+    }
+
+    /// A world exporting `t:t/counters` with one resource: a constructor, `get` and the
+    /// static `next`.
+    fn exported_world() -> (World, HashMap<String, crate::hir::Foreign>) {
+        let handle = |owned| Typed {
+            raw: "TTCountersCounter".into(),
+            shape: Shape::Exported { resource: 0, owned },
+            thrown: Thrown::Opaque,
+        };
+        let function = |member: &str, implementation: &str, role, result| ExportedFunction {
+            object: Some("counters".into()),
+            member: member.into(),
+            implementation: implementation.into(),
+            params: match role {
+                Role::Method(_) => vec![],
+                _ => vec![plain("number")],
+            },
+            result,
+            open: false,
+            role,
+            receiver: matches!(role, Role::Method(_)).then(|| handle(false)),
+        };
+        let world = World {
+            exports: vec![
+                function(
+                    "counter",
+                    "countersConstructorCounter",
+                    Role::Constructor(0),
+                    Some(handle(true)),
+                ),
+                function(
+                    "get",
+                    "countersMethodCounterGet",
+                    Role::Method(0),
+                    Some(plain("number")),
+                ),
+                function(
+                    "next",
+                    "countersStaticCounterNext",
+                    Role::Static(0),
+                    Some(handle(true)),
+                ),
+            ],
+            exported: vec![ExportedResource {
+                object: "counters".into(),
+                name: "Counter".into(),
+                handle: "TTCountersCounter".into(),
+                module: "t:t/counters".into(),
+                create: "newCounter".into(),
+                representation: "counterRep".into(),
+                drop: "dropCounter".into(),
+                destructor: "countersDtorCounter".into(),
+            }],
+            ..World::default()
+        };
+        let foreign = ["newCounter", "counterRep", "dropCounter"]
+            .into_iter()
+            .map(|name| {
+                (
+                    format!("t:t/counters#{name}"),
+                    crate::hir::Foreign::Resource(0),
+                )
+            })
+            .collect();
+        (world, foreign)
+    }
+
+    #[test]
+    fn an_exported_resource_class_is_typed_and_bound_to_exported_functions() -> Result<()> {
+        let (world, foreign) = exported_world();
+        let (names, imports) = declared_in(
+            &world,
+            &foreign,
+            "class Counter {
+               #value;
+               constructor(start) { this.#value = start; this.label = 'counter'; }
+               get() { return this.#value; }
+               static next(start) { return new Counter(start); }
+               [Symbol.dispose]() {}
+             }
+             export const counters = { Counter };",
+        )?;
+        assert_eq!(
+            names,
+            [
+                // The field the constructor assigns is declared, the private one is typed.
+                "class Counter",
+                "  typed field label",
+                "  typed field __private_value",
+                "  get",
+                "  next",
+                "  __dispose",
+                "countersMethodCounterGet",
+                "__jco_in0",
+                "countersStaticCounterNext",
+                "__jco_reg0",
+                "countersConstructorCounter",
+                "countersDtorCounter",
+            ]
+        );
+        assert_eq!(imports, ["counterRep", "newCounter"]);
+        Ok(())
+    }
+
+    #[test]
+    fn an_exported_resource_class_needs_every_method() {
+        let (world, foreign) = exported_world();
+        let error = declared_in(
+            &world,
+            &foreign,
+            "class Counter { static next(start) { return new Counter(); } }
+             export const counters = { Counter };",
+        )
+        .expect_err("a missing method");
+        assert!(
+            error
+                .to_string()
+                .contains("Class 'Counter' needs a method 'get'"),
+            "{error}"
+        );
     }
 
     #[test]

@@ -1,7 +1,8 @@
 //! The selected world as guest conventions name it: export objects, imported functions and
 //! the resources they pass, with every type in its TypeScript spelling.
 use crate::conventions::{
-    ExportedFunction, ImportedFunction, ImportedResource, Role, Shape, Thrown, Typed, World,
+    ExportedFunction, ExportedResource, ImportedFunction, ImportedResource, Role, Shape, Thrown,
+    Typed, World,
 };
 use crate::hir::Foreign;
 use crate::sdk::codegen::construct_text;
@@ -17,9 +18,16 @@ struct Types<'a> {
     foreign: &'a HashMap<String, Foreign>,
     /// Index of each imported resource in `World::resources`, by canonical type.
     resources: HashMap<TypeId, usize>,
+    /// Index of each exported resource in `World::exported`, by canonical type.
+    exported: HashMap<TypeId, usize>,
 }
 
 impl Types<'_> {
+    fn is_resource(&self, id: TypeId) -> bool {
+        let id = canonical_type(self.resolve, id);
+        self.resources.contains_key(&id) || self.exported.contains_key(&id)
+    }
+
     /// Named WIT types are registered under their qualified SDK names, which need no import.
     fn name(&self, id: TypeId) -> Option<String> {
         NamedType::get(self.resolve, id)
@@ -28,18 +36,15 @@ impl Types<'_> {
     }
 
     /// Whether a value of `ty` differs between the compiler's representation and the one
-    /// sources written against classes expect: it holds an imported resource or a `result`.
+    /// sources written against classes expect: it holds a resource or a `result`.
     fn converts(&self, ty: &Type) -> bool {
         let Type::Id(id) = ty else {
             return false;
         };
         match &self.resolve.types[*id].kind {
-            TypeDefKind::Resource => self
-                .resources
-                .contains_key(&canonical_type(self.resolve, *id)),
+            TypeDefKind::Resource => self.is_resource(*id),
             TypeDefKind::Handle(wit_parser::Handle::Own(id) | wit_parser::Handle::Borrow(id)) => {
-                self.resources
-                    .contains_key(&canonical_type(self.resolve, *id))
+                self.is_resource(*id)
             }
             TypeDefKind::Result(_) => true,
             kind => {
@@ -73,13 +78,23 @@ impl Types<'_> {
             &|contract: Contract<'_, Typed>| match contract {
                 Contract::Resource { id, owned } => {
                     let canonical = canonical_type(self.resolve, id);
-                    match self.resources.get(&canonical) {
-                        Some(index) => Typed {
-                            raw: self.name(canonical).unwrap_or_else(|| "unknown".into()),
-                            shape: Shape::Resource(*index),
-                            thrown: Thrown::Opaque,
+                    let shape = match (
+                        self.resources.get(&canonical),
+                        self.exported.get(&canonical),
+                    ) {
+                        (Some(index), _) => Shape::Resource(*index),
+                        (None, Some(index)) => Shape::Exported {
+                            resource: *index,
+                            owned,
                         },
-                        None => plain(construct_text(Contract::Resource { id, owned }, &name)),
+                        (None, None) => {
+                            return plain(construct_text(Contract::Resource { id, owned }, &name));
+                        }
+                    };
+                    Typed {
+                        raw: self.name(canonical).unwrap_or_else(|| "unknown".into()),
+                        shape,
+                        thrown: Thrown::Opaque,
                     }
                 }
                 Contract::Scalar(ty) => thrown(
@@ -245,6 +260,7 @@ pub(super) fn world(
         resolve,
         foreign,
         resources: HashMap::new(),
+        exported: HashMap::new(),
     };
 
     // Every resource an imported interface declares, then every name it is imported under:
@@ -283,6 +299,37 @@ pub(super) fn world(
                     .names
                     .push((module.clone(), to_pascal_case(name)));
             }
+        }
+    }
+
+    // A resource an exported interface declares is implemented by the component. One the
+    // world also imports stays the imported resource.
+    let mut exported = Vec::new();
+    for (key, item) in &world.exports {
+        let WorldItem::Interface { id, .. } = item else {
+            continue;
+        };
+        let module = resolve.name_world_key(key);
+        for (name, type_id) in &resolve.interfaces[*id].types {
+            if !matches!(resolve.types[*type_id].kind, TypeDefKind::Resource)
+                || types.resources.contains_key(type_id)
+            {
+                continue;
+            }
+            let Some(handle) = types.name(*type_id) else {
+                continue;
+            };
+            types.exported.insert(*type_id, exported.len());
+            exported.push(ExportedResource {
+                object: to_camel_case(interface_name(resolve, key, *id)),
+                name: to_pascal_case(name),
+                handle,
+                module: module.clone(),
+                create: format!("new{}", to_pascal_case(name)),
+                representation: format!("{}Rep", to_camel_case(name)),
+                drop: format!("drop{}", to_pascal_case(name)),
+                destructor: perry_contract::export_names::destructor_name(resolve, key, name),
+            });
         }
     }
 
@@ -325,22 +372,45 @@ pub(super) fn world(
     }
 
     let exports = perry_contract::world_functions(resolve, world.exports.iter())
-        .map(|entry| ExportedFunction {
-            object: entry
-                .interface
-                .map(|id| to_camel_case(interface_name(resolve, entry.key, id))),
-            member: to_camel_case(&entry.function.name),
-            implementation: entry.implementation_name(resolve, world),
-            params: entry
+        .map(|entry| {
+            let resource = entry
+                .function
+                .kind
+                .resource()
+                .and_then(|id| types.exported.get(&canonical_type(resolve, id)).copied());
+            let role = match (resource, entry.function.name.split(']').next()) {
+                (Some(resource), Some("[constructor")) => Role::Constructor(resource),
+                (Some(resource), Some("[method")) => Role::Method(resource),
+                (Some(resource), Some("[static")) => Role::Static(resource),
+                _ => Role::Function,
+            };
+            let mut params = entry
                 .function
                 .params
                 .iter()
-                .map(|param| types.typed(&param.ty))
-                .collect(),
-            result: entry.function.result.as_ref().map(|ty| types.typed(ty)),
-            // A `result` export may return its payload or a tagged result, and an `option`
-            // export `null` or `undefined`: the source decides.
-            open: entry.function.result.is_some_and(|ty| types.open(ty)),
+                .map(|param| types.typed(&param.ty));
+            let receiver = matches!(role, Role::Method(_))
+                .then(|| params.next())
+                .flatten();
+            ExportedFunction {
+                object: entry
+                    .interface
+                    .map(|id| to_camel_case(interface_name(resolve, entry.key, id))),
+                // A resource's function is a member of its class, a plain one of the object.
+                member: if role == Role::Function {
+                    to_camel_case(&entry.function.name)
+                } else {
+                    to_camel_case(entry.function.item_name())
+                },
+                implementation: entry.implementation_name(resolve, world),
+                params: params.collect(),
+                result: entry.function.result.as_ref().map(|ty| types.typed(ty)),
+                // A `result` export may return its payload or a tagged result, and an
+                // `option` export `null` or `undefined`: the source decides.
+                open: entry.function.result.is_some_and(|ty| types.open(ty)),
+                role,
+                receiver,
+            }
         })
         .collect();
 
@@ -348,5 +418,6 @@ pub(super) fn world(
         exports,
         imports,
         resources,
+        exported,
     }
 }

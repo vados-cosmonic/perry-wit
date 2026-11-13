@@ -108,6 +108,43 @@ export function run(): number {
 - Only the entry module's imports are converted. Other modules can receive and use the class instances.
 - A module that does neither keeps the opaque values: it passes them to imported functions and drops one with the generated `dropCounter(value)`.
 
+### Exported Resources
+
+A resource of an exported interface is implemented by a class named in the interface's export object, under the resource's PascalCase name:
+
+```wit
+interface counters {
+  resource counter {
+    constructor(start: u32);
+    get: func() -> u32;
+    make: static func(start: u32) -> counter;
+  }
+  total: func(items: list<borrow<counter>>) -> u32;
+}
+```
+
+```ts
+class Counter {
+  #value: number;
+  constructor(start: number) { this.#value = start; }
+  get() { return this.#value; }
+  static make(start: number) { return new Counter(start); }
+  [Symbol.dispose]() { /* the host dropped this counter */ }
+}
+
+export const counters = {
+  Counter,
+  total(items: Counter[]) { return items.reduce((sum, item) => sum + item.get(), 0); },
+};
+```
+
+- The property may name a class declared in the entry module, under any name, or hold a class expression.
+- The constructor, methods and static methods implement the resource's WIT functions, and take their types from them where the class declares none. Every WIT method needs one.
+- Exports take and return instances wherever the resource appears. Each instance returned becomes a new handle.
+- When the host drops a handle, the instance's `[Symbol.dispose]` method runs, if it has one. An instance passed to an export as an owned argument is consumed without being disposed.
+- Fields the constructor assigns from its parameters or from literals need no declaration. `#private` members compile as ordinary members.
+- A module may instead export the resource's functions itself, over the opaque values: `countersConstructorCounter`, `countersMethodCounterGet(self)` and `countersStaticCounterMake`, with `newCounter(representation)` and `counterRep(value)` from `example:app/counters`. An exported `countersDtorCounter(representation)` runs when a handle is dropped.
+
 ## Generated Types
 
 `perry-wit gen-types` writes `.d.ts` declarations for a world's imports and exports, plus a `tsconfig.json` that checks the entry module against them:
