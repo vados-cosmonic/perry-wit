@@ -1,7 +1,7 @@
 //! Source types and ownership helpers for a resolved component contract.
+mod conventions;
 mod types;
 
-use crate::conventions::ExportedFunction;
 use crate::hir::{Foreign, FunctionType, Type as HirType};
 use anyhow::{Context, Result};
 use perry_contract::{
@@ -14,7 +14,7 @@ use wit_parser::{Function, Resolve, TypeId, WorldId};
 #[derive(Default)]
 pub struct WorldTypes {
     foreign: HashMap<String, Foreign>,
-    exports: Vec<ExportedFunction>,
+    conventions: crate::conventions::World,
 }
 
 pub enum ResourceOperation {
@@ -33,21 +33,21 @@ impl WorldTypes {
     pub fn new(resolve: &Resolve, world: Option<WorldId>) -> Self {
         Self {
             foreign: types::foreign(resolve, world),
-            exports: Vec::new(),
+            conventions: Default::default(),
         }
-        .with_exports(resolve, world)
+        .with_conventions(resolve, world)
     }
 
-    fn with_exports(mut self, resolve: &Resolve, world: Option<WorldId>) -> Self {
+    fn with_conventions(mut self, resolve: &Resolve, world: Option<WorldId>) -> Self {
         if let Some(world) = world {
-            self.exports = exported_functions(resolve, world, &self.foreign);
+            self.conventions = conventions::world(resolve, world, &self.foreign);
         }
         self
     }
 
-    /// The functions the selected world exports, with the names a source may give them.
-    pub fn exports(&self) -> &[ExportedFunction] {
-        &self.exports
+    /// The selected world's exports, imports and resources as a source may name them.
+    pub fn conventions(&self) -> &crate::conventions::World {
+        &self.conventions
     }
 
     pub fn foreign(&self) -> &HashMap<String, Foreign> {
@@ -144,67 +144,6 @@ impl WorldTypes {
             })
             .collect())
     }
-}
-
-/// Whether a WIT result type has more than one TypeScript spelling.
-fn open_result(resolve: &Resolve, mut ty: wit_parser::Type) -> bool {
-    while let wit_parser::Type::Id(id) = ty {
-        match &resolve.types[id].kind {
-            wit_parser::TypeDefKind::Type(inner) => ty = *inner,
-            wit_parser::TypeDefKind::Result(_) | wit_parser::TypeDefKind::Option(_) => return true,
-            _ => break,
-        }
-    }
-    false
-}
-
-/// The export object of an interface is named after the interface, not its package.
-fn exported_functions(
-    resolve: &Resolve,
-    world: WorldId,
-    foreign: &HashMap<String, Foreign>,
-) -> Vec<ExportedFunction> {
-    let world = &resolve.worlds[world];
-    // Named WIT types are registered under their qualified SDK names, which need no import.
-    let name = |id| {
-        NamedType::get(resolve, id)
-            .map(|named| named.qualified())
-            .filter(|name| foreign.contains_key(name))
-    };
-    let text = |ty: &wit_parser::Type| {
-        crate::sdk::codegen::type_text(resolve, Input::Reference(*ty), &name)
-    };
-    perry_contract::world_functions(resolve, world.exports.iter())
-        .map(|entry| {
-            let object = entry.interface.map(|id| {
-                to_camel_case(match entry.key {
-                    wit_parser::WorldKey::Name(name) => name,
-                    wit_parser::WorldKey::Interface(_) => resolve.interfaces[id]
-                        .name
-                        .as_deref()
-                        .unwrap_or("interface"),
-                })
-            });
-            ExportedFunction {
-                object,
-                member: to_camel_case(&entry.function.name),
-                implementation: entry.implementation_name(resolve, world),
-                params: entry
-                    .function
-                    .params
-                    .iter()
-                    .map(|param| text(&param.ty))
-                    .collect(),
-                // A `result` export may return its payload or a tagged result, and an
-                // `option` export `null` or `undefined`: the source decides.
-                result: match &entry.function.result {
-                    None => Some("void".into()),
-                    Some(ty) if open_result(resolve, *ty) => None,
-                    Some(ty) => Some(text(ty)),
-                },
-            }
-        })
-        .collect()
 }
 
 fn source_type(resolve: &Resolve, id: TypeId) -> Option<HirType> {

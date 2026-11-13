@@ -13,10 +13,14 @@
 //!
 //! Such components are often plain JavaScript. The world already states each export's
 //! signature, so parameters and return types the source leaves out are taken from it.
+//!
+//! They also use imported resources as classes, which [classes] generates.
+mod classes;
+
 use anyhow::Result;
 use perry_parser::swc_ecma_ast as ast;
 use perry_wit_diagnostics::{DiagnosticCode, PerryDiagnostic, SourceSpan};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use swc_common::{DUMMY_SP, Span, SyntaxContext};
 use swc_ecma_visit::{VisitMut, VisitMutWith};
 
@@ -30,11 +34,99 @@ pub struct ExportedFunction {
     pub member: String,
     /// The exported TypeScript function Perry-WIT binds.
     pub implementation: String,
-    /// The TypeScript type of each WIT parameter, in order.
-    pub params: Vec<String>,
-    /// The TypeScript type of the WIT result. `None` when the source's own return type
-    /// decides how the result is produced, as for a WIT `result`.
-    pub result: Option<String>,
+    /// The type of each WIT parameter, in order.
+    pub params: Vec<Typed>,
+    /// The type of the WIT result.
+    pub result: Option<Typed>,
+    /// Whether the source's own return type decides how the result is produced, as for a
+    /// WIT `result` or `option`.
+    pub open: bool,
+}
+
+/// A WIT type in the compiler's TypeScript spelling, and where a source written against
+/// classes spells it differently.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Typed {
+    /// The compiler's spelling: resources are opaque handles, results `{ ok, value | error }`.
+    pub raw: String,
+    pub shape: Shape,
+    /// How a value of this type is thrown when it is the error of a `result`.
+    pub thrown: Thrown,
+}
+
+/// The compiler throws strings, numbers, booleans and `Error` objects.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Thrown {
+    /// The value itself: a string, number, boolean or enum case.
+    Value,
+    /// An `Error` whose message is a variant's case name.
+    Tag,
+    /// An `Error` naming the function that failed.
+    Opaque,
+}
+
+/// The parts of a type that need conversion between the two spellings.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Shape {
+    /// Both spellings agree.
+    Plain,
+    /// An imported resource, by index into [World::resources].
+    Resource(usize),
+    List(Box<Typed>),
+    Option(Box<Typed>),
+    Tuple(Vec<Typed>),
+    Record(Vec<(String, Typed)>),
+    Variant(Vec<(String, Option<Typed>)>),
+    /// A `result`, which such sources spell `{ tag: 'ok' | 'err', val }`.
+    Result {
+        ok: Option<Box<Typed>>,
+        err: Option<Box<Typed>>,
+    },
+}
+
+/// A resource an imported interface declares.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImportedResource {
+    /// The generated class.
+    pub class: String,
+    /// The opaque handle type.
+    pub handle: String,
+    /// The module declaring the resource, and its `drop` function there.
+    pub module: String,
+    pub drop: String,
+    /// Each module and name a source may import the resource under.
+    pub names: Vec<(String, String)>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Role {
+    Function,
+    Constructor(usize),
+    Method(usize),
+    Static(usize),
+}
+
+/// A function of an imported interface.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImportedFunction {
+    pub module: String,
+    /// The name the compiler binds the function under in `module`.
+    pub binding: String,
+    /// The function's or method's camelCase name.
+    pub member: String,
+    pub role: Role,
+    /// Parameters, without a method's receiver.
+    pub params: Vec<Typed>,
+    pub result: Option<Typed>,
+    pub is_async: bool,
+}
+
+/// The selected world as guest conventions name it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct World {
+    pub exports: Vec<ExportedFunction>,
+    pub imports: Vec<ImportedFunction>,
+    pub resources: Vec<ImportedResource>,
 }
 
 /// Where an export object is declared in the entry module.
@@ -539,8 +631,10 @@ fn annotate(
     name: &ast::Ident,
     function: &mut ast::Function,
     export: &ExportedFunction,
+    params: &[String],
+    result: Option<String>,
 ) -> Result<()> {
-    if function.params.len() > export.params.len() {
+    if function.params.len() > params.len() {
         let count =
             |count: usize| format!("{count} parameter{}", if count == 1 { "" } else { "s" });
         return Err(source.error(
@@ -549,21 +643,20 @@ fn annotate(
                 "Component export '{}' declares {}, but its WIT function takes {}",
                 export.implementation,
                 count(function.params.len()),
-                count(export.params.len()),
+                count(params.len()),
             ),
         ));
     }
-    let result = (function.return_type.is_none() && !function.is_generator)
-        .then_some(export.result.as_ref())
-        .flatten()
+    let result = result
+        .filter(|_| function.return_type.is_none() && !function.is_generator)
         .map(|result| {
             if function.is_async {
                 format!("Promise<{result}>")
             } else {
-                result.clone()
+                result
             }
         });
-    let mut types = export.params[..function.params.len()].to_vec();
+    let mut types = params[..function.params.len()].to_vec();
     types.extend(result.clone());
     let Some(mut types) = annotations(&types) else {
         return Ok(());
@@ -589,13 +682,40 @@ fn annotate(
     Ok(())
 }
 
-/// Type every implementation of a world export from its WIT signature.
+/// Whether an export's values differ between the compiler's representation and the
+/// source's. A `result` export returns its payload either way.
+fn converts(export: &ExportedFunction) -> bool {
+    let result = match export.result.as_ref() {
+        Some(Typed {
+            shape: Shape::Result { ok, .. },
+            ..
+        }) => ok.as_deref(),
+        other => other,
+    };
+    export.params.iter().any(|ty| ty.shape != Shape::Plain)
+        || result.is_some_and(|ty| ty.shape != Shape::Plain)
+}
+
+struct Rename<'a>(&'a HashMap<String, String>);
+impl VisitMut for Rename<'_> {
+    fn visit_mut_ident(&mut self, id: &mut ast::Ident) {
+        if let Some(name) = self.0.get(id.sym.as_ref()) {
+            id.sym = name.as_str().into();
+        }
+    }
+}
+
+/// Type every implementation of a world export from its WIT signature. With `classes`, an
+/// export whose values need conversion becomes an internal function behind a generated
+/// export.
 fn annotate_exports(
     module: &mut ast::Module,
     source: &Source<'_>,
-    exports: &[ExportedFunction],
+    world: &World,
+    mut classes: Option<&mut classes::Classes<'_>>,
 ) -> Result<()> {
-    let by_name: HashMap<&str, &ExportedFunction> = exports
+    let by_name: HashMap<&str, &ExportedFunction> = world
+        .exports
         .iter()
         .map(|export| (export.implementation.as_str(), export))
         .collect();
@@ -609,36 +729,106 @@ fn annotate_exports(
             }
         }
     }
+    let mut internal = HashMap::new();
+    let mut unexported = Vec::new();
     for item in &mut module.body {
-        match item {
+        let (function, export, exported) = match item {
             ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDecl(ast::ExportDecl {
                 decl: ast::Decl::Fn(function),
                 ..
-            })) => {
-                if let Some(export) = by_name.get(function.ident.sym.as_ref()) {
-                    annotate(source, &function.ident, &mut function.function, export)?;
-                }
-            }
+            })) => match by_name.get(function.ident.sym.as_ref()) {
+                Some(export) => (function, *export, true),
+                None => continue,
+            },
             ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Fn(function))) => {
-                if let Some(export) = locals.get(function.ident.sym.as_ref()) {
-                    annotate(source, &function.ident, &mut function.function, export)?;
+                match locals.get(function.ident.sym.as_ref()) {
+                    Some(export) => (function, *export, false),
+                    None => continue,
                 }
             }
-            _ => {}
+            _ => continue,
+        };
+        let result = |text: Option<String>| {
+            (!export.open).then(|| text.unwrap_or_else(|| "void".to_owned()))
+        };
+        match classes.as_deref_mut().filter(|_| converts(export)) {
+            Some(classes) => {
+                let params: Vec<_> = export
+                    .params
+                    .iter()
+                    .map(|ty| classes.source_type(ty))
+                    .collect();
+                let returned = export.result.as_ref().map(|ty| classes.source_type(ty));
+                annotate(
+                    source,
+                    &function.ident,
+                    &mut function.function,
+                    export,
+                    &params,
+                    result(returned),
+                )?;
+                let inner = if exported {
+                    let inner = format!("__jco_impl_{}", export.implementation);
+                    internal.insert(export.implementation.clone(), inner.clone());
+                    inner
+                } else {
+                    unexported.push(export.implementation.clone());
+                    function.ident.sym.to_string()
+                };
+                classes.export(
+                    export,
+                    &inner,
+                    function.function.params.len(),
+                    function.function.is_async,
+                );
+            }
+            None => {
+                let params: Vec<_> = export.params.iter().map(|ty| ty.raw.clone()).collect();
+                let returned = export.result.as_ref().map(|ty| ty.raw.clone());
+                annotate(
+                    source,
+                    &function.ident,
+                    &mut function.function,
+                    export,
+                    &params,
+                    result(returned),
+                )?;
+            }
         }
+    }
+    // The source's implementation, and its own calls to it, move behind the generated export.
+    for item in &mut module.body {
+        if let ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDecl(ast::ExportDecl {
+            decl: ast::Decl::Fn(function),
+            ..
+        })) = item
+            && internal.contains_key(function.ident.sym.as_ref())
+        {
+            *item = ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Fn(function.clone())));
+        }
+    }
+    if !internal.is_empty() {
+        module.visit_mut_with(&mut Rename(&internal));
+    }
+    for exported in unexported {
+        remove_named_export(module, &exported);
     }
     Ok(())
 }
 
 /// Rewrite the entry module's export objects and function-valued bindings into the
-/// exported functions the world's contract binds, typed from the contract.
+/// exported functions the world's contract binds, typed from the contract, and its
+/// imported resources into classes.
 pub(crate) fn apply(
     module: &mut ast::Module,
-    exports: &[ExportedFunction],
+    world: &World,
+    foreign: &HashMap<String, crate::hir::Foreign>,
+    sources: &BTreeMap<String, String>,
     text: &str,
     file: &str,
 ) -> Result<()> {
     let source = Source { text, file };
+    let exports = &world.exports;
     let mut objects: Vec<&str> = Vec::new();
     for export in exports {
         if let Some(object) = export.object.as_deref()
@@ -647,6 +837,7 @@ pub(crate) fn apply(
             objects.push(object);
         }
     }
+    let mut flattened = false;
     for object in objects {
         let Some(site) = find_object(module, object) else {
             continue;
@@ -657,36 +848,68 @@ pub(crate) fn apply(
             .map(|export| (export.member.as_str(), export.implementation.as_str()))
             .collect();
         flatten_object(module, &source, object, site, &implementations)?;
+        flattened = true;
     }
     let names = exports
         .iter()
         .map(|export| export.implementation.as_str())
         .collect();
     declare_functions(module, &names);
-    annotate_exports(module, &source, exports)
+    // A source that exports objects or constructs resources is written against classes.
+    if !flattened && !classes::imports_resource(module, world) {
+        return annotate_exports(module, &source, world, None);
+    }
+    let used = |name: &str| text.contains(name) || sources.values().any(|text| text.contains(name));
+    let mut classes = classes::Classes::new(world, foreign, used);
+    classes.bind_imports(module);
+    annotate_exports(module, &source, world, Some(&mut classes))?;
+    classes.finish(module)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn exports(entries: &[(Option<&str>, &str, &str)]) -> Vec<ExportedFunction> {
-        entries
-            .iter()
-            .map(|(object, member, implementation)| ExportedFunction {
-                object: object.map(str::to_owned),
-                member: (*member).to_owned(),
-                implementation: (*implementation).to_owned(),
-                params: vec!["number".into(), "Array<string>".into()],
-                result: Some("string".into()),
-            })
-            .collect()
+    fn plain(raw: &str) -> Typed {
+        Typed {
+            raw: raw.to_owned(),
+            shape: Shape::Plain,
+            thrown: Thrown::Value,
+        }
+    }
+
+    fn exports(entries: &[(Option<&str>, &str, &str)]) -> World {
+        World {
+            exports: entries
+                .iter()
+                .map(|(object, member, implementation)| ExportedFunction {
+                    object: object.map(str::to_owned),
+                    member: (*member).to_owned(),
+                    implementation: (*implementation).to_owned(),
+                    params: vec![plain("number"), plain("Array<string>")],
+                    result: Some(plain("string")),
+                    open: false,
+                })
+                .collect(),
+            ..World::default()
+        }
+    }
+
+    fn run(module: &mut ast::Module, world: &World, source: &str) -> Result<()> {
+        apply(
+            module,
+            world,
+            &HashMap::new(),
+            &BTreeMap::new(),
+            source,
+            "main.ts",
+        )
     }
 
     /// Whether each parameter of the first function named `name` is typed, and its return.
-    fn typed(source: &str, exports: &[ExportedFunction], name: &str) -> Result<(Vec<bool>, bool)> {
+    fn typed(source: &str, exports: &World, name: &str) -> Result<(Vec<bool>, bool)> {
         let mut module = crate::hir_compat::parse(source, "main.ts")?;
-        apply(&mut module, exports, source, "main.ts")?;
+        run(&mut module, exports, source)?;
         let function = module
             .body
             .iter()
@@ -751,9 +974,9 @@ mod tests {
     }
 
     /// The module's exported function names, then every other top-level declaration.
-    fn shape(source: &str, exports: &[ExportedFunction]) -> Result<(Vec<String>, Vec<String>)> {
+    fn shape(source: &str, exports: &World) -> Result<(Vec<String>, Vec<String>)> {
         let mut module = crate::hir_compat::parse(source, "main.ts")?;
-        apply(&mut module, exports, source, "main.ts")?;
+        run(&mut module, exports, source)?;
         let mut exported = Vec::new();
         let mut internal = Vec::new();
         for item in &module.body {
@@ -863,5 +1086,176 @@ mod tests {
                 .contains("Component export 'math.add' needs a function"),
             "{error}"
         );
+    }
+
+    /// A world importing `t:t/res` with one resource: a constructor, `hello` and `make`.
+    fn resource_world() -> (World, HashMap<String, crate::hir::Foreign>) {
+        let handle = Typed {
+            raw: "TTResExample".into(),
+            shape: Shape::Resource(0),
+            thrown: Thrown::Opaque,
+        };
+        let function =
+            |binding: &str, member: &str, role, result: Option<Typed>| ImportedFunction {
+                module: "t:t/res".into(),
+                binding: binding.into(),
+                member: member.into(),
+                role,
+                params: vec![],
+                result,
+                is_async: false,
+            };
+        let world = World {
+            exports: vec![ExportedFunction {
+                object: None,
+                member: "run".into(),
+                implementation: "run".into(),
+                params: vec![],
+                result: Some(plain("string")),
+                open: false,
+            }],
+            imports: vec![
+                function(
+                    "ConstructorExample",
+                    "constructor",
+                    Role::Constructor(0),
+                    None,
+                ),
+                function(
+                    "MethodExampleHello",
+                    "hello",
+                    Role::Method(0),
+                    Some(plain("string")),
+                ),
+                function("MethodExampleUnused", "unused", Role::Method(0), None),
+                function(
+                    "StaticExampleMake",
+                    "make",
+                    Role::Static(0),
+                    Some(handle.clone()),
+                ),
+                function("find", "find", Role::Function, Some(handle)),
+                function("count", "count", Role::Function, Some(plain("number"))),
+            ],
+            resources: vec![ImportedResource {
+                class: "__jco_TTResExample".into(),
+                handle: "TTResExample".into(),
+                module: "t:t/res".into(),
+                drop: "dropExample".into(),
+                names: vec![("t:t/res".into(), "Example".into())],
+            }],
+        };
+        let foreign = [
+            "ConstructorExample",
+            "MethodExampleHello",
+            "MethodExampleUnused",
+            "StaticExampleMake",
+            "find",
+            "count",
+            "dropExample",
+        ]
+        .into_iter()
+        .map(|name| (format!("t:t/res#{name}"), crate::hir::Foreign::Resource(0)))
+        .collect();
+        (world, foreign)
+    }
+
+    /// Top-level names the pass leaves in the module, and the names its imports bind.
+    fn declared(source: &str) -> Result<(Vec<String>, Vec<String>)> {
+        let (world, foreign) = resource_world();
+        let mut module = crate::hir_compat::parse(source, "main.ts")?;
+        apply(
+            &mut module,
+            &world,
+            &foreign,
+            &BTreeMap::new(),
+            source,
+            "main.ts",
+        )?;
+        let mut names = Vec::new();
+        let mut imports = Vec::new();
+        for item in &module.body {
+            match item {
+                ast::ModuleItem::ModuleDecl(ast::ModuleDecl::Import(import)) => {
+                    for specifier in &import.specifiers {
+                        if let ast::ImportSpecifier::Named(named) = specifier {
+                            let imported = named.imported.as_ref().map(|name| name.atom());
+                            imports.push(imported.map_or_else(
+                                || named.local.sym.to_string(),
+                                |name| name.to_string(),
+                            ));
+                        }
+                    }
+                }
+                ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Class(class))) => {
+                    names.push(format!("class {}", class.ident.sym));
+                    for member in &class.class.body {
+                        if let ast::ClassMember::Method(method) = member
+                            && let ast::PropName::Ident(name) = &method.key
+                        {
+                            names.push(format!("  {}", name.sym));
+                        }
+                    }
+                }
+                ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Fn(function)))
+                | ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDecl(ast::ExportDecl {
+                    decl: ast::Decl::Fn(function),
+                    ..
+                })) => names.push(function.ident.sym.to_string()),
+                _ => {}
+            }
+        }
+        imports.sort();
+        Ok((names, imports))
+    }
+
+    #[test]
+    fn an_imported_resource_becomes_a_class_with_the_methods_the_source_uses() -> Result<()> {
+        let (names, imports) = declared(
+            "import { Example, find, count } from 't:t/res';
+             export function run(): string {
+               using made = Example.make();
+               return new Example().hello() + find().hello() + count();
+             }",
+        )?;
+        assert_eq!(
+            names,
+            [
+                "run",
+                // `find` returns a resource, so a converting function replaces its import.
+                "__jco_out0",
+                "find",
+                "class __jco_TTResExample",
+                "  hello",
+                "  make",
+                "  __dispose",
+                "__jco_new__jco_TTResExample",
+            ]
+        );
+        // `count` needs no conversion and stays imported; the rest are the bindings the
+        // generated code calls. `unused` is never mentioned, so it is not bound.
+        assert_eq!(
+            imports,
+            [
+                "ConstructorExample",
+                "MethodExampleHello",
+                "StaticExampleMake",
+                "count",
+                "dropExample",
+                "find",
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_source_using_opaque_handles_keeps_its_imports() -> Result<()> {
+        let (names, imports) = declared(
+            "import { find, count, dropExample } from 't:t/res';
+             export function run(): string { dropExample(find()); return '' + count(); }",
+        )?;
+        assert_eq!(names, ["run"]);
+        assert_eq!(imports, ["count", "dropExample", "find"]);
+        Ok(())
     }
 }

@@ -154,7 +154,7 @@ pub(crate) fn compile_sources(
         identity,
         modules,
         foreign.foreign(),
-        foreign.exports(),
+        foreign.conventions(),
     )
     .map_err(map_lower_error)?;
     let mir = perry_lower::lower_program(ctx, &program).map_err(map_lower_error)?;
@@ -300,7 +300,7 @@ fn lower(
         file_name,
         modules,
         foreign.foreign(),
-        foreign.exports(),
+        foreign.conventions(),
     )
     .map_err(map_lower_error)?;
     let mir = perry_lower::lower_program(ctx, &program).map_err(map_lower_error)?;

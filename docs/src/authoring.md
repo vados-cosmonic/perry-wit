@@ -74,6 +74,40 @@ export const math = {
 - Only exports are typed this way. Other functions and local variables still need types the compiler can infer.
 - An export that declares more parameters than its WIT function is rejected.
 
+### Imported Resources
+
+An imported WIT resource is an opaque value, and its constructor, methods and static functions are imported functions that take it.
+A module that exports an interface as an object, or imports a resource by name, may use the resource as a class instead:
+
+```wit
+interface counters {
+  resource counter {
+    constructor(start: u32);
+    value: func() -> u32;
+    checked: func() -> result<u32, string>;
+    make: static func(start: u32) -> counter;
+  }
+  all: func() -> list<counter>;
+}
+```
+
+```ts
+import { Counter, all } from 'example:app/counters';
+
+export function run(): number {
+  using first = new Counter(1);
+  const second = Counter.make(2);
+  return first.value() + second.checked() + all().length;
+}
+```
+
+- `new`, method calls and static calls map to the resource's WIT functions. The class name is also the resource's type.
+- `using` and `value[Symbol.dispose]()` drop the resource.
+- A function or method declared to return a WIT `result` returns its payload and throws its error. A `result` passed as a value is `{ tag: 'ok', val }` or `{ tag: 'err', val }`.
+- Resources convert wherever they appear: in lists, tuples, records, variants and options, and in the parameters and results of exports.
+- Only the entry module's imports are converted. Other modules can receive and use the class instances.
+- A module that does neither keeps the opaque values: it passes them to imported functions and drops one with the generated `dropCounter(value)`.
+
 ## Generated Types
 
 `perry-wit gen-types` writes `.d.ts` declarations for a world's imports and exports, plus a `tsconfig.json` that checks the entry module against them:

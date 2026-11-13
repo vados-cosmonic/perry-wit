@@ -30,7 +30,6 @@ where
         .with_context(|| format!("no exported function {function}"))?;
     let function = instance.get_typed_func::<P, R>(&mut *store, export)?;
     let result = function.call(&mut *store, params)?;
-    function.post_return(&mut *store)?;
     Ok(result)
 }
 
@@ -267,5 +266,197 @@ fn declared_types_win_and_extra_parameters_are_rejected() -> Result<()> {
             .contains("declares 3 parameters, but its WIT function takes 2 parameters"),
         "{error:#}"
     );
+    Ok(())
+}
+
+const COUNTERS: &str = "package test:conventions;
+interface counters {
+  resource counter {
+    constructor(start: u32);
+    value: func() -> u32;
+    next: func() -> counter;
+    checked: func(fail: bool) -> result<u32, string>;
+    make: static func(start: u32) -> counter;
+  }
+  all: func() -> list<counter>;
+  take: func(c: counter) -> u32;
+  settle: func(r: result<counter, string>) -> string;
+}
+world test { import counters; export run: func() -> result<string, string>; }";
+
+struct Counter;
+
+/// Run `body` as the export of a component importing `counters`; returns its result and
+/// how many counters the guest dropped.
+fn counters(file: &str, body: &str) -> Result<(String, u32)> {
+    use wasmtime::component::{Component, Linker, Resource, ResourceType};
+    let source = format!(
+        "import {{ Counter, all, take, settle }} from 'test:conventions/counters';
+         export function run() {{ {body} }}"
+    );
+    let engine = Engine::default();
+    let component = Component::new(
+        &engine,
+        Compiler::Standard.component(COUNTERS, "test", file, &source)?,
+    )?;
+    let mut linker = Linker::<u32>::new(&engine);
+    let mut host = linker.instance("test:conventions/counters")?;
+    host.resource(
+        "counter",
+        ResourceType::host::<Counter>(),
+        |mut store, _| {
+            *store.data_mut() += 1;
+            Ok(())
+        },
+    )?;
+    host.func_wrap("[constructor]counter", |_, (start,): (u32,)| {
+        Ok((Resource::<Counter>::new_own(start),))
+    })?;
+    host.func_wrap(
+        "[method]counter.value",
+        |_, (this,): (Resource<Counter>,)| Ok((this.rep(),)),
+    )?;
+    host.func_wrap(
+        "[method]counter.next",
+        |_, (this,): (Resource<Counter>,)| Ok((Resource::<Counter>::new_own(this.rep() + 1),)),
+    )?;
+    host.func_wrap(
+        "[method]counter.checked",
+        |_, (this, fail): (Resource<Counter>, bool)| {
+            Ok((if fail {
+                Err("bad".to_string())
+            } else {
+                Ok(this.rep())
+            },))
+        },
+    )?;
+    host.func_wrap("[static]counter.make", |_, (start,): (u32,)| {
+        Ok((Resource::<Counter>::new_own(start * 10),))
+    })?;
+    host.func_wrap("all", |_, ()| {
+        Ok((vec![
+            Resource::<Counter>::new_own(1),
+            Resource::<Counter>::new_own(2),
+        ],))
+    })?;
+    host.func_wrap("take", |_, (counter,): (Resource<Counter>,)| {
+        assert!(counter.owned());
+        Ok((counter.rep(),))
+    })?;
+    host.func_wrap(
+        "settle",
+        |_, (result,): (std::result::Result<Resource<Counter>, String>,)| {
+            Ok((match result {
+                Ok(counter) => format!("ok{}", counter.rep()),
+                Err(error) => format!("err{error}"),
+            },))
+        },
+    )?;
+    let mut store = Store::new(&engine, 0u32);
+    let instance = linker.instantiate(&mut store, &component)?;
+    let run =
+        instance.get_typed_func::<(), (std::result::Result<String, String>,)>(&mut store, "run")?;
+    let (result,) = run.call(&mut store, ())?;
+    let text = result.map_err(|error| anyhow::anyhow!("{body}: threw {error}"))?;
+    Ok((text, *store.data()))
+}
+
+/// An imported resource is a class: `new`, methods, static functions and disposal map to
+/// the resource's WIT functions, and values holding resources convert at each call.
+#[test]
+fn imported_resources_are_classes() -> Result<()> {
+    for (body, expected) in [
+        ("const c = new Counter(3); return '' + c.value();", "3"),
+        ("return '' + Counter.make(2).next().value();", "21"),
+        (
+            "const items = all(); return '' + items.length + items[1].value();",
+            "22",
+        ),
+        ("const c = new Counter(5); return '' + take(c);", "5"),
+        // A method declared to return a WIT result returns its payload or throws its error.
+        (
+            "const c = new Counter(6); return '' + c.checked(false);",
+            "6",
+        ),
+        (
+            "const c = new Counter(6);
+             try { c.checked(true); return 'no'; }
+             catch (error) { return error === 'bad' ? 'caught' : 'other'; }",
+            "caught",
+        ),
+        // A result passed as a value is spelled `{ tag, val }`.
+        (
+            "return settle({ tag: 'ok', val: new Counter(8) }) + settle({ tag: 'err', val: 'no' });",
+            "ok8errno",
+        ),
+    ] {
+        assert_eq!(counters("counters.ts", body)?.0, expected, "{body}");
+        // The same body needs no annotations.
+        assert_eq!(counters("counters.js", body)?.0, expected, "{body}");
+    }
+    Ok(())
+}
+
+#[test]
+fn resource_classes_are_disposed_by_using_and_symbol_dispose() -> Result<()> {
+    for body in [
+        "let text = ''; { using c = new Counter(11); text = '' + c.value(); } return text;",
+        "const c = new Counter(11); const text = '' + c.value(); c[Symbol.dispose](); return text;",
+    ] {
+        assert_eq!(counters("counters.ts", body)?, ("11".into(), 1), "{body}");
+    }
+    Ok(())
+}
+
+/// Resources cross the export boundary as class instances too.
+#[test]
+fn exports_take_and_return_resource_classes() -> Result<()> {
+    use wasmtime::component::{Component, Linker, Resource, ResourceType};
+    let wit = "package test:conventions;
+interface counters { resource counter { constructor(start: u32); value: func() -> u32; } }
+interface api {
+  use counters.{counter};
+  describe: func(c: counter) -> string;
+  create: func(start: u32) -> counter;
+}
+world test { import counters; export api; }";
+    let source = "import { Counter } from 'test:conventions/counters';
+export const api = {
+  describe(c) { return 'got' + c.value(); },
+  create(start) { return new Counter(start); },
+};";
+    let engine = Engine::default();
+    let component = Component::new(
+        &engine,
+        Compiler::Standard.component(wit, "test", "api.js", source)?,
+    )?;
+    let mut linker = Linker::<()>::new(&engine);
+    let mut host = linker.instance("test:conventions/counters")?;
+    host.resource("counter", ResourceType::host::<Counter>(), |_, _| Ok(()))?;
+    host.func_wrap("[constructor]counter", |_, (start,): (u32,)| {
+        Ok((Resource::<Counter>::new_own(start),))
+    })?;
+    host.func_wrap(
+        "[method]counter.value",
+        |_, (this,): (Resource<Counter>,)| Ok((this.rep(),)),
+    )?;
+    let mut store = Store::new(&engine, ());
+    let instance = linker.instantiate(&mut store, &component)?;
+    let (_, api) = instance
+        .get_export(&mut store, None, "test:conventions/api")
+        .context("no exported api")?;
+    let (_, describe) = instance
+        .get_export(&mut store, Some(&api), "describe")
+        .context("no describe")?;
+    let (_, create) = instance
+        .get_export(&mut store, Some(&api), "create")
+        .context("no create")?;
+    let describe =
+        instance.get_typed_func::<(Resource<Counter>,), (String,)>(&mut store, describe)?;
+    let create = instance.get_typed_func::<(u32,), (Resource<Counter>,)>(&mut store, create)?;
+    let (text,) = describe.call(&mut store, (Resource::new_own(3),))?;
+    assert_eq!(text, "got3");
+    let (counter,) = create.call(&mut store, (5,))?;
+    assert_eq!(counter.rep(), 5);
     Ok(())
 }

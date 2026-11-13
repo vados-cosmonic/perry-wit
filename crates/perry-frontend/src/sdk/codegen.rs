@@ -21,7 +21,17 @@ pub(crate) fn type_text(
     input: Input,
     name: &impl Fn(wit_parser::TypeId) -> Option<String>,
 ) -> String {
-    convert(resolve, input, name, &|contract| match contract {
+    convert(resolve, input, name, &|contract| {
+        construct_text(contract, name)
+    })
+}
+
+/// The TypeScript spelling of one WIT type constructor over already spelled children.
+pub(crate) fn construct_text(
+    contract: Contract<'_, String>,
+    name: &impl Fn(wit_parser::TypeId) -> Option<String>,
+) -> String {
+    match contract {
         Contract::Scalar(ty) => scalar_type(ty).into(),
         Contract::Resource { id, .. } => name(id).unwrap_or_else(|| "unknown".into()),
         Contract::Bytes => "Uint8Array".into(),
@@ -60,7 +70,7 @@ pub(crate) fn type_text(
             out
         }
         Contract::Unsupported(_) => "unknown".into(),
-    })
+    }
 }
 
 fn has_bytes(resolve: &Resolve, ty: &Type) -> bool {

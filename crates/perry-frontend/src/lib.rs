@@ -60,20 +60,27 @@ pub fn load_sources<'s>(
     sources: &'s BTreeMap<String, String>,
     foreign: &'s HashMap<String, hir::Foreign>,
 ) -> Result<Program<'s>> {
-    load_world_sources(ctx, source, identity, sources, foreign, &[])
+    load_world_sources(
+        ctx,
+        source,
+        identity,
+        sources,
+        foreign,
+        &conventions::World::default(),
+    )
 }
 
-/// Load sources whose entry module implements `exports`, the selected world's functions,
-/// in any supported guest convention.
+/// Load sources whose entry module implements `world`, the selected world's contract, in
+/// any supported guest convention.
 pub fn load_world_sources<'s>(
     ctx: &mut Context,
     source: &'s str,
     identity: &str,
     sources: &'s BTreeMap<String, String>,
     foreign: &'s HashMap<String, hir::Foreign>,
-    exports: &[conventions::ExportedFunction],
+    world: &conventions::World,
 ) -> Result<Program<'s>> {
-    let loaded = modules::load(source, identity, sources, foreign, exports)?;
+    let loaded = modules::load(source, identity, sources, foreign, world)?;
     let mut lowered = hir_compat::lower(loaded, identity)?;
     infer::specialize_functions(ctx, &mut lowered.module, &lowered.metadata, foreign)?;
     infer::unresolved_types(ctx, &mut lowered.module, &lowered.metadata, foreign);
