@@ -499,3 +499,19 @@ addEventListener('fetch', (event) => event.respondWith((async () => {
     }
     Ok(())
 }
+
+/// The portable way to sleep, a promise around a callback timer, waits on the clock.
+#[tokio::test(flavor = "current_thread")]
+async fn a_promise_around_a_callback_timer_sleeps() -> Result<()> {
+    let source = "export async function run(url: string): Promise<string> {
+  const before = Date.now();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  await new Promise<void>((done) => { setTimeout(() => done(), 1); });
+  return Date.now() - before >= 20 ? 'slept' : 'early';
+}";
+    let (mut store, instance) = instance(WIT, source, Host::default()).await?;
+    let run = instance.get_typed_func::<(&str,), (String,)>(&mut store, "run")?;
+    let (value,) = run.call_async(&mut store, ("",)).await?;
+    assert_eq!(value, "slept");
+    Ok(())
+}

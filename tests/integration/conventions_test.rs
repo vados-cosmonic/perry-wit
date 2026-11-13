@@ -555,3 +555,36 @@ export const api = {
     assert_eq!(counter.rep(), 5);
     Ok(())
 }
+
+/// Such sources leave a WIT `option` argument `undefined`.
+#[test]
+fn an_option_argument_may_be_undefined() -> Result<()> {
+    use wasmtime::component::{Component, Linker};
+    let wit = "package test:conventions;
+interface labels { describe: func(label: option<string>, count: option<u32>) -> string; }
+interface api { run: func() -> string; }
+world test { import labels; export api; }";
+    let source = "import { describe } from 'test:conventions/labels';
+export const api = {
+  run() { return describe(undefined, 3) + describe('x', undefined) + describe(null, null); },
+};";
+    let engine = Engine::default();
+    let component = Component::new(
+        &engine,
+        Compiler::Standard.component(wit, "test", "labels.js", source)?,
+    )?;
+    let mut linker = Linker::<()>::new(&engine);
+    linker.instance("test:conventions/labels")?.func_wrap(
+        "describe",
+        |_, (label, count): (Option<String>, Option<u32>)| {
+            let label = label.unwrap_or_else(|| "none".into());
+            let count = count.map_or_else(|| "none".into(), |count| count.to_string());
+            Ok((format!("{label}/{count} "),))
+        },
+    )?;
+    let mut store = Store::new(&engine, ());
+    let instance = linker.instantiate(&mut store, &component)?;
+    let (text,): (String,) = call(&mut store, &instance, "api", "run", ())?;
+    assert_eq!(text, "none/3 x/none none/none ");
+    Ok(())
+}

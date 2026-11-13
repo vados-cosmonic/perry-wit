@@ -319,12 +319,9 @@ impl<'a> Classes<'a> {
         receiver: Option<&str>,
     ) -> Option<(String, String, String)> {
         let raw = self.raw(&function.module, &function.binding)?;
-        let mut params = Vec::new();
         let mut arguments: Vec<String> = receiver.into_iter().map(str::to_owned).collect();
-        for (index, param) in function.params.iter().enumerate() {
-            params.push(format!("p{index}: {}", self.source_type(param)));
-            arguments.push(self.converted(param, false, &format!("p{index}")));
-        }
+        let (params, converted) = self.parameters(function);
+        arguments.extend(converted);
         let wait = if function.is_async { "await " } else { "" };
         let call = format!("{wait}{raw}({})", arguments.join(", "));
         let (result, body) = match &function.result {
@@ -362,7 +359,26 @@ impl<'a> Classes<'a> {
         } else {
             result
         };
-        Some((params.join(", "), result, body))
+        Some((params, result, body))
+    }
+
+    /// The declared parameters of a wrapper around `function` and the arguments it passes
+    /// on. A WIT `option` may be left `undefined`, as such sources do.
+    fn parameters(&mut self, function: &ImportedFunction) -> (String, Vec<String>) {
+        let mut params = Vec::new();
+        let mut arguments = Vec::new();
+        for (index, param) in function.params.iter().enumerate() {
+            let ty = self.source_type(param);
+            if function.optional.get(index).copied().unwrap_or(false) {
+                params.push(format!("p{index}: {ty} | undefined"));
+                let value = format!("(p{index} === undefined ? null : p{index})");
+                arguments.push(self.converted(param, false, &value));
+            } else {
+                params.push(format!("p{index}: {ty}"));
+                arguments.push(self.converted(param, false, &format!("p{index}")));
+            }
+        }
+        (params.join(", "), arguments)
     }
 
     fn keyword(function: &ImportedFunction) -> &'static str {
@@ -401,6 +417,7 @@ impl<'a> Classes<'a> {
                         && function.module == source
                         && function.binding == name
                         && (function.params.iter().any(|ty| ty.shape != Shape::Plain)
+                            || function.optional.contains(&true)
                             || function
                                 .result
                                 .as_ref()
@@ -527,15 +544,9 @@ impl<'a> Classes<'a> {
                     }
                     Role::Constructor(owner) if owner == index => {
                         if let Some(raw) = self.raw(&function.module, &function.binding) {
-                            let mut params = Vec::new();
-                            let mut arguments = Vec::new();
-                            for (index, param) in function.params.iter().enumerate() {
-                                params.push(format!("p{index}: {}", self.source_type(param)));
-                                arguments.push(self.converted(param, false, &format!("p{index}")));
-                            }
+                            let (params, arguments) = self.parameters(function);
                             constructor = format!(
-                                "function __jco_new{class}({}): {class} {{ return new {class}({raw}({})); }}\n",
-                                params.join(", "),
+                                "function __jco_new{class}({params}): {class} {{ return new {class}({raw}({})); }}\n",
                                 arguments.join(", ")
                             );
                         }

@@ -222,6 +222,18 @@ impl Types<'_> {
         }
     }
 
+    /// Whether a type is a WIT `option`, which such sources may leave `undefined`.
+    fn optional(&self, mut ty: Type) -> bool {
+        while let Type::Id(id) = ty {
+            match &self.resolve.types[id].kind {
+                TypeDefKind::Type(inner) => ty = *inner,
+                TypeDefKind::Option(_) => return true,
+                _ => break,
+            }
+        }
+        false
+    }
+
     /// Whether the TypeScript spelling of a WIT result is the source's choice.
     fn open(&self, mut ty: Type) -> bool {
         while let Type::Id(id) = ty {
@@ -364,6 +376,12 @@ pub(super) fn world(
                     .iter()
                     .skip(skip)
                     .map(|param| types.typed(&param.ty))
+                    .collect(),
+                optional: function
+                    .params
+                    .iter()
+                    .skip(skip)
+                    .map(|param| types.optional(param.ty))
                     .collect(),
                 result: function.result.as_ref().map(|ty| types.typed(ty)),
                 is_async: function.kind.is_async(),

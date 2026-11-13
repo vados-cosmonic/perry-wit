@@ -16,10 +16,12 @@
 //!
 //! They also use imported resources as classes, which [classes] generates, and implement
 //! exported resources as classes, which [exported] binds. An HTTP component may register a
-//! `fetch` listener, which [fetch] turns into the handler's export object.
+//! `fetch` listener, which [fetch] turns into the handler's export object. [timers] covers
+//! the one portable way to sleep.
 mod classes;
 mod exported;
 mod fetch;
+mod timers;
 
 use anyhow::Result;
 use perry_parser::swc_ecma_ast as ast;
@@ -150,6 +152,8 @@ pub struct ImportedFunction {
     pub role: Role,
     /// Parameters, without a method's receiver.
     pub params: Vec<Typed>,
+    /// Whether each parameter is a WIT `option`.
+    pub optional: Vec<bool>,
     pub result: Option<Typed>,
     pub is_async: bool,
 }
@@ -918,6 +922,7 @@ pub(crate) fn apply(
     file: &str,
 ) -> Result<()> {
     let source = Source { text, file };
+    timers::bind(module);
     let handler = fetch::bind(module, &source, world)?;
     let exports = &world.exports;
     let mut objects: Vec<&str> = Vec::new();
@@ -1222,6 +1227,7 @@ mod tests {
                 member: member.into(),
                 role,
                 params: vec![],
+                optional: vec![],
                 result,
                 is_async: false,
             };
@@ -1512,6 +1518,61 @@ mod tests {
                 .contains("Class 'Counter' needs a method 'get'"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn an_imported_function_taking_an_option_is_wrapped_to_accept_undefined() -> Result<()> {
+        let (mut world, mut foreign) = resource_world();
+        world.imports.push(ImportedFunction {
+            module: "t:t/res".into(),
+            binding: "describe".into(),
+            member: "describe".into(),
+            role: Role::Function,
+            params: vec![plain("string | null"), plain("number")],
+            optional: vec![true, false],
+            result: Some(plain("string")),
+            is_async: false,
+        });
+        foreign.insert("t:t/res#describe".into(), crate::hir::Foreign::Resource(0));
+        let source = "import { Example, describe } from 't:t/res';
+             export function run(): string { new Example(); return describe(undefined, 1); }";
+        let mut module = crate::hir_compat::parse(source, "main.ts")?;
+        apply(
+            &mut module,
+            &world,
+            &foreign,
+            &BTreeMap::new(),
+            source,
+            "main.ts",
+        )?;
+        // The wrapper replaces the import and declares the option with `undefined`.
+        let wrapper = module.body.iter().find_map(|item| match item {
+            ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Fn(function)))
+                if function.ident.sym == "describe" =>
+            {
+                Some(&function.function)
+            }
+            _ => None,
+        });
+        let wrapper = wrapper.expect("a wrapper around describe");
+        let unions: Vec<usize> = wrapper
+            .params
+            .iter()
+            .map(|param| match &param.pat {
+                ast::Pat::Ident(binding) => match binding.type_ann.as_deref() {
+                    Some(ast::TsTypeAnn { type_ann, .. }) => match type_ann.as_ref() {
+                        ast::TsType::TsUnionOrIntersectionType(
+                            ast::TsUnionOrIntersectionType::TsUnionType(union),
+                        ) => union.types.len(),
+                        _ => 1,
+                    },
+                    None => 0,
+                },
+                _ => 0,
+            })
+            .collect();
+        assert_eq!(unions, [3, 1]);
+        Ok(())
     }
 
     #[test]

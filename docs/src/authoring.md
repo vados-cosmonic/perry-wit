@@ -105,8 +105,19 @@ export function run(): number {
 - `using` and `value[Symbol.dispose]()` drop the resource.
 - A function or method declared to return a WIT `result` returns its payload and throws its error. A `result` passed as a value is `{ tag: 'ok', val }` or `{ tag: 'err', val }`.
 - Resources convert wherever they appear: in lists, tuples, records, variants and options, and in the parameters and results of exports.
+- An `option` argument of an imported function, constructor or method may be `undefined` as well as `null`. An `option` the component receives is `null` when empty.
 - Only the entry module's imports are converted. Other modules can receive and use the class instances.
 - A module that does neither keeps the opaque values: it passes them to imported functions and drops one with the generated `dropCounter(value)`.
+
+### Sleeping
+
+`setTimeout` from `node:timers/promises` returns a promise. There are no callback timers and no `Promise` constructor, except in the portable way to sleep, which compiles to the same timer:
+
+```ts
+await new Promise((resolve) => setTimeout(resolve, 1000));
+```
+
+The timer's callback may also be a function that only calls `resolve()`. The world needs to import the clock, as for any timer.
 
 ### Exported Resources
 
