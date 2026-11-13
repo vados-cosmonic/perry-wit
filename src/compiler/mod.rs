@@ -148,8 +148,15 @@ pub(crate) fn compile_sources(
     let mut foreign = perry_frontend::wit::WorldTypes::new(resolve, Some(world));
     let mut bindings = imports::bindings(resolve, world, &mut foreign);
     let resources = resources::definitions(resolve, world, &mut foreign, &mut bindings)?;
-    let program = perry_frontend::load_sources(ctx, source, identity, modules, foreign.foreign())
-        .map_err(map_lower_error)?;
+    let program = perry_frontend::load_world_sources(
+        ctx,
+        source,
+        identity,
+        modules,
+        foreign.foreign(),
+        foreign.exports(),
+    )
+    .map_err(map_lower_error)?;
     let mir = perry_lower::lower_program(ctx, &program).map_err(map_lower_error)?;
     let mut exports = bind::exports(ctx, &mir, resolve, world)?;
     bind::constrain_numbers(ctx, &mir, &exports)?;
@@ -287,8 +294,15 @@ fn lower(
     modules: &BTreeMap<String, String>,
     foreign: &perry_frontend::wit::WorldTypes,
 ) -> Result<(pliron::builtin::ops::ModuleOp, AnalysisManager)> {
-    let program = perry_frontend::load_sources(ctx, source, file_name, modules, foreign.foreign())
-        .map_err(map_lower_error)?;
+    let program = perry_frontend::load_world_sources(
+        ctx,
+        source,
+        file_name,
+        modules,
+        foreign.foreign(),
+        foreign.exports(),
+    )
+    .map_err(map_lower_error)?;
     let mir = perry_lower::lower_program(ctx, &program).map_err(map_lower_error)?;
     let analyses = optimize(ctx, &mir)?;
     Ok((mir, analyses))

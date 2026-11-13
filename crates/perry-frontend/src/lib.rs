@@ -7,6 +7,7 @@ pub use open_types::{TypeState, binding_type, contextual_type};
 mod absence;
 pub mod collections;
 pub mod completion;
+pub mod conventions;
 pub mod hir_compat;
 mod infer;
 pub mod methods;
@@ -59,7 +60,20 @@ pub fn load_sources<'s>(
     sources: &'s BTreeMap<String, String>,
     foreign: &'s HashMap<String, hir::Foreign>,
 ) -> Result<Program<'s>> {
-    let loaded = modules::load(source, identity, sources, foreign)?;
+    load_world_sources(ctx, source, identity, sources, foreign, &[])
+}
+
+/// Load sources whose entry module implements `exports`, the selected world's functions,
+/// in any supported guest convention.
+pub fn load_world_sources<'s>(
+    ctx: &mut Context,
+    source: &'s str,
+    identity: &str,
+    sources: &'s BTreeMap<String, String>,
+    foreign: &'s HashMap<String, hir::Foreign>,
+    exports: &[conventions::ExportedFunction],
+) -> Result<Program<'s>> {
+    let loaded = modules::load(source, identity, sources, foreign, exports)?;
     let mut lowered = hir_compat::lower(loaded, identity)?;
     infer::specialize_functions(ctx, &mut lowered.module, &lowered.metadata, foreign)?;
     infer::unresolved_types(ctx, &mut lowered.module, &lowered.metadata, foreign);

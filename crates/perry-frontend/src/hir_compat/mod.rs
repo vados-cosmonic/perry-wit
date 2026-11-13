@@ -126,7 +126,7 @@ function shadow(Set:any) { return new Set<number>(9); }
 function builtin() { return new Set<string>(); }
 "#;
         let modules = std::collections::BTreeMap::new();
-        let loaded = modules::load(source, "shadow.ts", &modules, &HashMap::new()).unwrap();
+        let loaded = modules::load(source, "shadow.ts", &modules, &HashMap::new(), &[]).unwrap();
         let lowered = lower(loaded, "shadow.ts").unwrap();
         for function in &lowered.module.functions {
             let Stmt::Return(Some(expr)) = &function.body[0] else {
@@ -170,7 +170,7 @@ function builtin() { return new Set<string>(); }
             }"#,
         ] {
             let modules = std::collections::BTreeMap::new();
-            let loaded = modules::load(source, "names.ts", &modules, &HashMap::new()).unwrap();
+            let loaded = modules::load(source, "names.ts", &modules, &HashMap::new(), &[]).unwrap();
             let lowered = lower(loaded, "names.ts").unwrap();
             let function = &lowered.module.functions[0];
             let user = function.body.iter().find_map(|stmt| match stmt {

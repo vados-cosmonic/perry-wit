@@ -1,6 +1,7 @@
 //! Source types and ownership helpers for a resolved component contract.
 mod types;
 
+use crate::conventions::ExportedFunction;
 use crate::hir::{Foreign, FunctionType, Type as HirType};
 use anyhow::{Context, Result};
 use perry_contract::{
@@ -13,6 +14,7 @@ use wit_parser::{Function, Resolve, TypeId, WorldId};
 #[derive(Default)]
 pub struct WorldTypes {
     foreign: HashMap<String, Foreign>,
+    exports: Vec<ExportedFunction>,
 }
 
 pub enum ResourceOperation {
@@ -31,7 +33,13 @@ impl WorldTypes {
     pub fn new(resolve: &Resolve, world: Option<WorldId>) -> Self {
         Self {
             foreign: types::foreign(resolve, world),
+            exports: world.map_or_else(Vec::new, |world| exported_functions(resolve, world)),
         }
+    }
+
+    /// The functions the selected world exports, with the names a source may give them.
+    pub fn exports(&self) -> &[ExportedFunction] {
+        &self.exports
     }
 
     pub fn foreign(&self) -> &HashMap<String, Foreign> {
@@ -128,6 +136,29 @@ impl WorldTypes {
             })
             .collect())
     }
+}
+
+/// The export object of an interface is named after the interface, not its package.
+fn exported_functions(resolve: &Resolve, world: WorldId) -> Vec<ExportedFunction> {
+    let world = &resolve.worlds[world];
+    perry_contract::world_functions(resolve, world.exports.iter())
+        .map(|entry| {
+            let object = entry.interface.map(|id| {
+                to_camel_case(match entry.key {
+                    wit_parser::WorldKey::Name(name) => name,
+                    wit_parser::WorldKey::Interface(_) => resolve.interfaces[id]
+                        .name
+                        .as_deref()
+                        .unwrap_or("interface"),
+                })
+            });
+            ExportedFunction {
+                object,
+                member: to_camel_case(&entry.function.name),
+                implementation: entry.implementation_name(resolve, world),
+            }
+        })
+        .collect()
 }
 
 fn source_type(resolve: &Resolve, id: TypeId) -> Option<HirType> {

@@ -27,6 +27,35 @@ wasmtime run -C cache=n -S p3=y -W component-model-async=y --invoke 'run-task("h
 - `--core-only` emits the standalone core WebAssembly module. `--keep-names` preserves function names in the custom `name` section for guest profiling.
 - WASI 0.3 packages resolve from `WASI_WIT_PATH`. Packages in `wit/deps` take precedence over them.
 
+### Exported Interfaces
+
+A function of an exported interface binds to an exported function named after both: `add` of `interface math` is `mathAdd`.
+The entry module may instead export one object per interface, as components written for `jco componentize` do:
+
+```wit
+interface math {
+  add: func(x: u32, y: u32) -> u32;
+}
+
+world calculator {
+  export math;
+}
+```
+
+```ts
+export const math = {
+  add(x: number, y: number): number {
+    return x + y;
+  },
+};
+```
+
+- The object is named after the interface in `camelCase`, without its package. It may be declared first and exported with `export { implementation as math }`.
+- A property is a method, an arrow function, a function expression, or the name of a function declaration.
+- Inside the object, `this.member` and `math.member` reach the other properties. Properties the interface does not declare stay internal.
+- The object exists only in source. The compiler rewrites it to the exported functions above, so it cannot be passed around as a value.
+- A function the world exports directly may be written `export const run = () => { ... }`.
+
 ## Generated Types
 
 `perry-wit gen-types` writes `.d.ts` declarations for a world's imports and exports, plus a `tsconfig.json` that checks the entry module against them:

@@ -23,8 +23,10 @@ pub(crate) fn load<'s>(
     file: &str,
     sources: &'s BTreeMap<String, String>,
     foreign: &HashMap<String, crate::hir::Foreign>,
+    exports: &[crate::conventions::ExportedFunction],
 ) -> Result<Loaded<'s>> {
     let mut initial = parse(source, file)?;
+    crate::conventions::apply(&mut initial, exports, source, file)?;
     wit_imports(&mut initial, foreign, Path::new(file), sources);
     let needs_graph = initial.body.iter().any(|item| match item {
         ast::ModuleItem::ModuleDecl(ast::ModuleDecl::Import(import)) => {
