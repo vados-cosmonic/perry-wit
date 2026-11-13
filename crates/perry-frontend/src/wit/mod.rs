@@ -33,8 +33,16 @@ impl WorldTypes {
     pub fn new(resolve: &Resolve, world: Option<WorldId>) -> Self {
         Self {
             foreign: types::foreign(resolve, world),
-            exports: world.map_or_else(Vec::new, |world| exported_functions(resolve, world)),
+            exports: Vec::new(),
         }
+        .with_exports(resolve, world)
+    }
+
+    fn with_exports(mut self, resolve: &Resolve, world: Option<WorldId>) -> Self {
+        if let Some(world) = world {
+            self.exports = exported_functions(resolve, world, &self.foreign);
+        }
+        self
     }
 
     /// The functions the selected world exports, with the names a source may give them.
@@ -138,9 +146,34 @@ impl WorldTypes {
     }
 }
 
+/// Whether a WIT result type has more than one TypeScript spelling.
+fn open_result(resolve: &Resolve, mut ty: wit_parser::Type) -> bool {
+    while let wit_parser::Type::Id(id) = ty {
+        match &resolve.types[id].kind {
+            wit_parser::TypeDefKind::Type(inner) => ty = *inner,
+            wit_parser::TypeDefKind::Result(_) | wit_parser::TypeDefKind::Option(_) => return true,
+            _ => break,
+        }
+    }
+    false
+}
+
 /// The export object of an interface is named after the interface, not its package.
-fn exported_functions(resolve: &Resolve, world: WorldId) -> Vec<ExportedFunction> {
+fn exported_functions(
+    resolve: &Resolve,
+    world: WorldId,
+    foreign: &HashMap<String, Foreign>,
+) -> Vec<ExportedFunction> {
     let world = &resolve.worlds[world];
+    // Named WIT types are registered under their qualified SDK names, which need no import.
+    let name = |id| {
+        NamedType::get(resolve, id)
+            .map(|named| named.qualified())
+            .filter(|name| foreign.contains_key(name))
+    };
+    let text = |ty: &wit_parser::Type| {
+        crate::sdk::codegen::type_text(resolve, Input::Reference(*ty), &name)
+    };
     perry_contract::world_functions(resolve, world.exports.iter())
         .map(|entry| {
             let object = entry.interface.map(|id| {
@@ -156,6 +189,19 @@ fn exported_functions(resolve: &Resolve, world: WorldId) -> Vec<ExportedFunction
                 object,
                 member: to_camel_case(&entry.function.name),
                 implementation: entry.implementation_name(resolve, world),
+                params: entry
+                    .function
+                    .params
+                    .iter()
+                    .map(|param| text(&param.ty))
+                    .collect(),
+                // A `result` export may return its payload or a tagged result, and an
+                // `option` export `null` or `undefined`: the source decides.
+                result: match &entry.function.result {
+                    None => Some("void".into()),
+                    Some(ty) if open_result(resolve, *ty) => None,
+                    Some(ty) => Some(text(ty)),
+                },
             }
         })
         .collect()

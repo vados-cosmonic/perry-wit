@@ -10,6 +10,9 @@
 //!
 //! This pass rewrites the entry module from the second form into the first, before module
 //! binding, so the rest of the compiler sees only exported functions.
+//!
+//! Such components are often plain JavaScript. The world already states each export's
+//! signature, so parameters and return types the source leaves out are taken from it.
 use anyhow::Result;
 use perry_parser::swc_ecma_ast as ast;
 use perry_wit_diagnostics::{DiagnosticCode, PerryDiagnostic, SourceSpan};
@@ -27,6 +30,11 @@ pub struct ExportedFunction {
     pub member: String,
     /// The exported TypeScript function Perry-WIT binds.
     pub implementation: String,
+    /// The TypeScript type of each WIT parameter, in order.
+    pub params: Vec<String>,
+    /// The TypeScript type of the WIT result. `None` when the source's own return type
+    /// decides how the result is produced, as for a WIT `result`.
+    pub result: Option<String>,
 }
 
 /// Where an export object is declared in the entry module.
@@ -492,8 +500,138 @@ fn declare_functions(module: &mut ast::Module, names: &HashSet<&str>) {
     }
 }
 
+struct ClearSpans;
+impl VisitMut for ClearSpans {
+    fn visit_mut_span(&mut self, span: &mut Span) {
+        *span = DUMMY_SP;
+    }
+}
+
+/// Type annotations parsed from the TypeScript spelling of each type.
+fn annotations(types: &[String]) -> Option<Vec<Option<Box<ast::TsTypeAnn>>>> {
+    let params: Vec<_> = types
+        .iter()
+        .enumerate()
+        .map(|(index, ty)| format!("p{index}: {ty}"))
+        .collect();
+    let declaration = format!("function f({}) {{}}", params.join(", "));
+    let mut module = crate::hir_compat::parse(&declaration, "wit-signature.ts").ok()?;
+    module.visit_mut_with(&mut ClearSpans);
+    let ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Fn(function))) = module.body.pop()? else {
+        return None;
+    };
+    Some(
+        function
+            .function
+            .params
+            .into_iter()
+            .map(|param| match param.pat {
+                ast::Pat::Ident(binding) => binding.type_ann,
+                _ => None,
+            })
+            .collect(),
+    )
+}
+
+/// Give an export's implementation the types of its WIT signature where it declares none.
+fn annotate(
+    source: &Source<'_>,
+    name: &ast::Ident,
+    function: &mut ast::Function,
+    export: &ExportedFunction,
+) -> Result<()> {
+    if function.params.len() > export.params.len() {
+        let count =
+            |count: usize| format!("{count} parameter{}", if count == 1 { "" } else { "s" });
+        return Err(source.error(
+            name.span,
+            format!(
+                "Component export '{}' declares {}, but its WIT function takes {}",
+                export.implementation,
+                count(function.params.len()),
+                count(export.params.len()),
+            ),
+        ));
+    }
+    let result = (function.return_type.is_none() && !function.is_generator)
+        .then_some(export.result.as_ref())
+        .flatten()
+        .map(|result| {
+            if function.is_async {
+                format!("Promise<{result}>")
+            } else {
+                result.clone()
+            }
+        });
+    let mut types = export.params[..function.params.len()].to_vec();
+    types.extend(result.clone());
+    let Some(mut types) = annotations(&types) else {
+        return Ok(());
+    };
+    if result.is_some() {
+        function.return_type = types.pop().flatten();
+    }
+    for (param, ty) in function.params.iter_mut().zip(types) {
+        let declared = match &mut param.pat {
+            ast::Pat::Ident(binding) => &mut binding.type_ann,
+            ast::Pat::Array(pattern) => &mut pattern.type_ann,
+            ast::Pat::Object(pattern) => &mut pattern.type_ann,
+            ast::Pat::Assign(pattern) => match pattern.left.as_mut() {
+                ast::Pat::Ident(binding) => &mut binding.type_ann,
+                _ => continue,
+            },
+            _ => continue,
+        };
+        if declared.is_none() {
+            *declared = ty;
+        }
+    }
+    Ok(())
+}
+
+/// Type every implementation of a world export from its WIT signature.
+fn annotate_exports(
+    module: &mut ast::Module,
+    source: &Source<'_>,
+    exports: &[ExportedFunction],
+) -> Result<()> {
+    let by_name: HashMap<&str, &ExportedFunction> = exports
+        .iter()
+        .map(|export| (export.implementation.as_str(), export))
+        .collect();
+    // A function declaration exported by name is typed as its first world export.
+    let mut locals: HashMap<String, &ExportedFunction> = HashMap::new();
+    for (exported, local) in named_exports(module) {
+        if let Some(export) = by_name.get(exported.as_str()) {
+            let current = locals.entry(local).or_insert(export);
+            if current.implementation > export.implementation {
+                *current = export;
+            }
+        }
+    }
+    for item in &mut module.body {
+        match item {
+            ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDecl(ast::ExportDecl {
+                decl: ast::Decl::Fn(function),
+                ..
+            })) => {
+                if let Some(export) = by_name.get(function.ident.sym.as_ref()) {
+                    annotate(source, &function.ident, &mut function.function, export)?;
+                }
+            }
+            ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Fn(function))) => {
+                if let Some(export) = locals.get(function.ident.sym.as_ref()) {
+                    annotate(source, &function.ident, &mut function.function, export)?;
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// Rewrite the entry module's export objects and function-valued bindings into the
-/// exported functions the world's contract binds.
+/// exported functions the world's contract binds, typed from the contract.
 pub(crate) fn apply(
     module: &mut ast::Module,
     exports: &[ExportedFunction],
@@ -525,7 +663,7 @@ pub(crate) fn apply(
         .map(|export| export.implementation.as_str())
         .collect();
     declare_functions(module, &names);
-    Ok(())
+    annotate_exports(module, &source, exports)
 }
 
 #[cfg(test)]
@@ -539,8 +677,77 @@ mod tests {
                 object: object.map(str::to_owned),
                 member: (*member).to_owned(),
                 implementation: (*implementation).to_owned(),
+                params: vec!["number".into(), "Array<string>".into()],
+                result: Some("string".into()),
             })
             .collect()
+    }
+
+    /// Whether each parameter of the first function named `name` is typed, and its return.
+    fn typed(source: &str, exports: &[ExportedFunction], name: &str) -> Result<(Vec<bool>, bool)> {
+        let mut module = crate::hir_compat::parse(source, "main.ts")?;
+        apply(&mut module, exports, source, "main.ts")?;
+        let function = module
+            .body
+            .iter()
+            .find_map(|item| match item {
+                ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDecl(ast::ExportDecl {
+                    decl: ast::Decl::Fn(function),
+                    ..
+                }))
+                | ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Fn(function)))
+                    if function.ident.sym == name =>
+                {
+                    Some(&function.function)
+                }
+                _ => None,
+            })
+            .expect("the function is declared");
+        let params = function
+            .params
+            .iter()
+            .map(|param| match &param.pat {
+                ast::Pat::Ident(binding) => binding.type_ann.is_some(),
+                _ => false,
+            })
+            .collect();
+        Ok((params, function.return_type.is_some()))
+    }
+
+    #[test]
+    fn untyped_exports_take_their_types_from_the_world() -> Result<()> {
+        let world = exports(&[
+            (Some("math"), "add", "mathAdd"),
+            (None, "run", "run"),
+            (None, "stop", "stop"),
+        ]);
+        let source = "export const math = { add(a, b) { return helper(a); } };
+            function helper(value) { return ''; }
+            export function run(a) { return ''; }
+            function stopped(a, b) { return ''; }
+            export { stopped as stop };";
+        assert_eq!(typed(source, &world, "mathAdd")?, (vec![true, true], true));
+        assert_eq!(typed(source, &world, "run")?, (vec![true], true));
+        assert_eq!(typed(source, &world, "stopped")?, (vec![true, true], true));
+        // Functions the world does not export keep their own types.
+        assert_eq!(typed(source, &world, "helper")?, (vec![false], false));
+        Ok(())
+    }
+
+    #[test]
+    fn an_export_with_more_parameters_than_the_world_is_rejected() {
+        let error = typed(
+            "export function run(a, b, c) {}",
+            &exports(&[(None, "run", "run")]),
+            "run",
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("declares 3 parameters, but its WIT function takes 2 parameters"),
+            "{error}"
+        );
     }
 
     /// The module's exported function names, then every other top-level declaration.

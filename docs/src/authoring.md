@@ -56,6 +56,24 @@ export const math = {
 - The object exists only in source. The compiler rewrites it to the exported functions above, so it cannot be passed around as a value.
 - A function the world exports directly may be written `export const run = () => { ... }`.
 
+### Untyped Exports
+
+The world states each export's signature, so an export may leave its parameter and return types out.
+The compiler takes them from the WIT function, which lets a plain JavaScript entry module implement a world:
+
+```js
+export const math = {
+  add(x, y) {
+    return x + y;
+  },
+};
+```
+
+- Types the source declares are kept. Only missing annotations are filled in.
+- The return type of a `result` or `option` export is left to inference, since the source may spell it more than one way.
+- Only exports are typed this way. Other functions and local variables still need types the compiler can infer.
+- An export that declares more parameters than its WIT function is rejected.
+
 ## Generated Types
 
 `perry-wit gen-types` writes `.d.ts` declarations for a world's imports and exports, plus a `tsconfig.json` that checks the entry module against them:

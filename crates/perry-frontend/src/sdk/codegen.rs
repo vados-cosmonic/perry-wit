@@ -12,51 +12,55 @@ use std::{collections::HashSet, fmt::Write as _};
 use wit_parser::{Function, Resolve, Type, TypeDefKind, World, WorldItem, WorldKey};
 
 fn type_to_ts(names: &TsNames<'_>, input: Input) -> String {
-    convert(
-        names.resolve,
-        input,
-        &|id| names.name(id),
-        &|contract| match contract {
-            Contract::Scalar(ty) => scalar_type(ty).into(),
-            Contract::Resource { id, .. } => names.name(id).unwrap_or_else(|| "unknown".into()),
-            Contract::Bytes => "Uint8Array".into(),
-            Contract::ByteStream => "ReadableStream<Uint8Array>".into(),
-            Contract::List(ty) => format!("Array<{ty}>"),
-            Contract::Option(ty) => format!("{ty} | null"),
-            Contract::Result { ok, err } => {
-                let ok = ok.map(|ty| format!("; value: {ty}")).unwrap_or_default();
-                let err = err.map(|ty| format!("; error: {ty}")).unwrap_or_default();
-                format!("{{ ok: true{ok} }} | {{ ok: false{err} }}")
+    type_text(names.resolve, input, &|id| names.name(id))
+}
+
+/// The TypeScript spelling of a WIT type, with named types spelled by `name`.
+pub(crate) fn type_text(
+    resolve: &Resolve,
+    input: Input,
+    name: &impl Fn(wit_parser::TypeId) -> Option<String>,
+) -> String {
+    convert(resolve, input, name, &|contract| match contract {
+        Contract::Scalar(ty) => scalar_type(ty).into(),
+        Contract::Resource { id, .. } => name(id).unwrap_or_else(|| "unknown".into()),
+        Contract::Bytes => "Uint8Array".into(),
+        Contract::ByteStream => "ReadableStream<Uint8Array>".into(),
+        Contract::List(ty) => format!("Array<{ty}>"),
+        Contract::Option(ty) => format!("{ty} | null"),
+        Contract::Result { ok, err } => {
+            let ok = ok.map(|ty| format!("; value: {ty}")).unwrap_or_default();
+            let err = err.map(|ty| format!("; error: {ty}")).unwrap_or_default();
+            format!("{{ ok: true{ok} }} | {{ ok: false{err} }}")
+        }
+        Contract::Tuple(items) => {
+            format!("[{}]", items.collect::<Vec<_>>().join(", "))
+        }
+        Contract::Record(fields) => {
+            let mut out = String::from("{\n");
+            for (name, ty) in fields {
+                let _ = writeln!(out, "  {name}: {ty};");
             }
-            Contract::Tuple(items) => {
-                format!("[{}]", items.collect::<Vec<_>>().join(", "))
-            }
-            Contract::Record(fields) => {
-                let mut out = String::from("{\n");
-                for (name, ty) in fields {
-                    let _ = writeln!(out, "  {name}: {ty};");
+            out.push('}');
+            out
+        }
+        Contract::Enum(cases) => cases
+            .map(|name| format!("\"{name}\""))
+            .collect::<Vec<_>>()
+            .join(" | "),
+        Contract::Variant(cases) => {
+            let mut out = String::new();
+            for (name, payload) in cases {
+                let _ = write!(out, "\n  | {{ tag: \"{name}\"");
+                if let Some(ty) = payload {
+                    let _ = write!(out, "; val: {ty}");
                 }
-                out.push('}');
-                out
+                out.push_str(" }");
             }
-            Contract::Enum(cases) => cases
-                .map(|name| format!("\"{name}\""))
-                .collect::<Vec<_>>()
-                .join(" | "),
-            Contract::Variant(cases) => {
-                let mut out = String::new();
-                for (name, payload) in cases {
-                    let _ = write!(out, "\n  | {{ tag: \"{name}\"");
-                    if let Some(ty) = payload {
-                        let _ = write!(out, "; val: {ty}");
-                    }
-                    out.push_str(" }");
-                }
-                out
-            }
-            Contract::Unsupported(_) => "unknown".into(),
-        },
-    )
+            out
+        }
+        Contract::Unsupported(_) => "unknown".into(),
+    })
 }
 
 fn has_bytes(resolve: &Resolve, ty: &Type) -> bool {
