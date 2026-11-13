@@ -221,6 +221,26 @@ wasmtime serve -S p3=y -W component-model-async=y handler.wasm
 The adapter reads the whole request body before calling `handle`.
 An uncaught exception becomes a `500` response, and the instance keeps serving later requests.
 
+### Fetch Listeners
+
+A world that exports `wasi:http/incoming-handler@0.2` is implemented by an `incomingHandler` export object whose `handle(request, responseOut)` uses the resource classes of `wasi:http/types`.
+A module without that object may register a `fetch` listener instead, at its top level:
+
+```ts
+async function reply(request: Request): Promise<Response> {
+  const name = (await request.text()) || "world";
+  return new Response(`Hello ${name}\n`, { headers: { "content-type": "text/plain" } });
+}
+
+addEventListener("fetch", (event) => event.respondWith(reply(event.request)));
+```
+
+- The listener is a function, or the name of a function declared in the module, taking the event. `self.addEventListener` and `globalThis.addEventListener` register it too.
+- Its last statement calls `event.respondWith` with a `Response` or a promise of one. An immediately called function, as in `event.respondWith((async () => { ... })())`, is accepted.
+- `event.request` is a `Request` with the method, URL, headers and body of the incoming request. The whole body is read before the listener runs.
+- The response's status and body are sent, with these headers when it sets them: the `content-*` headers `type`, `encoding`, `language`, `disposition`, `location`, `range` and `security-policy`, `cache-control`, `location`, `set-cookie`, `etag`, `last-modified`, `expires`, `vary`, `allow`, `link`, `retry-after`, `www-authenticate`, `accept-ranges`, the `access-control-*` response headers, `strict-transport-security`, `x-content-type-options` and `x-frame-options`. Other headers are not sent: a `Headers` value cannot be enumerated yet.
+- A listener that throws, or whose promise rejects, produces a `500` response.
+
 ## New Projects
 
 The flake template creates a standalone project. Its development shell generates `.perry/types` on entry, and `nix build` type-checks and compiles the component:

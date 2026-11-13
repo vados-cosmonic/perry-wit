@@ -15,9 +15,11 @@
 //! signature, so parameters and return types the source leaves out are taken from it.
 //!
 //! They also use imported resources as classes, which [classes] generates, and implement
-//! exported resources as classes, which [exported] binds.
+//! exported resources as classes, which [exported] binds. An HTTP component may register a
+//! `fetch` listener, which [fetch] turns into the handler's export object.
 mod classes;
 mod exported;
+mod fetch;
 
 use anyhow::Result;
 use perry_parser::swc_ecma_ast as ast;
@@ -916,6 +918,7 @@ pub(crate) fn apply(
     file: &str,
 ) -> Result<()> {
     let source = Source { text, file };
+    let handler = fetch::bind(module, &source, world)?;
     let exports = &world.exports;
     let mut objects: Vec<&str> = Vec::new();
     for export in exports {
@@ -969,7 +972,11 @@ pub(crate) fn apply(
     if !flattened && !classes::imports_resource(module, world) {
         return annotate_exports(module, &source, world, None);
     }
-    let used = |name: &str| text.contains(name) || sources.values().any(|text| text.contains(name));
+    let used = |name: &str| {
+        text.contains(name)
+            || handler.is_some_and(|text| text.contains(name))
+            || sources.values().any(|text| text.contains(name))
+    };
     let mut classes = classes::Classes::new(world, foreign, used);
     classes.bind_imports(module);
     classes.bind_exported(module, &source, &implemented)?;
