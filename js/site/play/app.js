@@ -110,7 +110,7 @@ function setBusy(busy) {
   $('function').disabled = busy || ![...$('function').options].some(option => option.value);
 }
 function finish() {
-  if (operation?.kind === 'compile') { operation.worker.terminate(); clearTimeout(operation.deadline); }
+  if (operation?.kind === 'compile') { const { worker } = operation; setTimeout(() => worker.terminate(), 5000); clearTimeout(operation.deadline); }
   operation = undefined;
   $('cancel').hidden = true;
   setBusy(false);
