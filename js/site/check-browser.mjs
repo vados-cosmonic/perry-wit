@@ -102,7 +102,11 @@ try {
         if (path.endsWith('/') || !path) path += 'index.html';
         if (path.split('/').includes('..')) return route.abort();
         if (path === 'style.css') await delay(100);
-        try { await route.fulfill({ body: await readFile(join(directory, path)), contentType: mime[extname(path)] || 'application/octet-stream' }); entry.done = Date.now(); }
+        try {
+          let body = await readFile(join(directory, path));
+          if (path === 'play/assets/worker.js' && process.env.KEEP_AWAKE === '1') body = Buffer.concat([body, Buffer.from('\n{const c=WebAssembly.compile;WebAssembly.compile=async b=>{const t=setInterval(()=>{},50);try{return await c.call(WebAssembly,b)}finally{clearInterval(t)}}}\n')]);
+          await route.fulfill({ body, contentType: mime[extname(path)] || 'application/octet-stream' }); entry.done = Date.now();
+        }
         catch (error) { entry.error = String(error); await route.fulfill({ status: 404, body: `Missing ${path}` }); }
       });
       let documentFailure = null;

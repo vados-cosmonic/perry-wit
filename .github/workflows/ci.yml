@@ -220,9 +220,12 @@ jobs:
           npm ci --prefix js --ignore-scripts --no-audit --no-fund
           npm --prefix js run test:e2e -- --tarball "${tarball[0]}"
           failures=0
-          for i in $(seq 1 60); do
-            echo "=== iteration $i"
-            BROWSERS=webkit node js/site/check-browser.mjs || { failures=$((failures + 1)); echo "=== iteration $i FAILED"; }
+          lscpu | grep -E 'Model name|^CPU\(s\)' || true
+          for i in $(seq 1 30); do
+            for arm in 0 1; do
+              echo "=== iteration $i arm $arm"
+              KEEP_AWAKE=$arm BROWSERS=webkit node js/site/check-browser.mjs || { failures=$((failures + 1)); echo "=== arm $arm FAILED"; }
+            done
           done
           echo "=== failures: $failures of 60"
           test "$failures" -eq 0
