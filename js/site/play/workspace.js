@@ -1,5 +1,6 @@
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8', { fatal: true });
+const wasmMagic = [0x00, 0x61, 0x73, 0x6d];
 const skipped = new Set(['.git', '.direnv', '.perry', 'target', 'node_modules', 'dist', 'build', 'vendor']);
 export const encode = text => encoder.encode(text);
 export const decode = bytes => decoder.decode(bytes);
@@ -50,7 +51,11 @@ export function compileRequest(files, entry, witFile, world) {
         if (!packages.has(group)) packages.set(group, []);
         packages.get(group).push(source);
       }
-    } else if (name.startsWith(dependencyRoot) && name.endsWith('.wasm')) encoded.push(contents);
+    } else if (name.startsWith(dependencyRoot) && name.endsWith('.wasm')) {
+      // perry-wit takes bytes without the `\0asm` header for WIT text, and would report a WIT parse error naming no file.
+      if (!wasmMagic.every((byte, index) => contents[index] === byte)) throw new Error(`${name} is not a binary-encoded WIT package.`);
+      encoded.push(contents);
+    }
   }
   return {
     source: { path: entry, contents: files.get(entry) },

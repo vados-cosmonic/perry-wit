@@ -12,6 +12,15 @@ test('module identities and grouped WIT are passed as byte buffers', () => {
   assert(request.source.contents instanceof Uint8Array);
 });
 
+test('encoded WIT dependencies must be WebAssembly binaries', () => {
+  const files = bytes => new Map([['src/main.ts', encode('source')], ['wit/world.wit', encode('contract')], ['wit/deps/foo.wasm', bytes]]);
+  const binary = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x0d, 0x00, 0x01, 0x00]);
+  assert.deepEqual(compileRequest(files(binary), 'src/main.ts', 'wit/world.wit').witDependencies, [binary]);
+  for (const bytes of [new Uint8Array(0), binary.subarray(0, 3), encode('package test:types;')]) {
+    assert.throws(() => compileRequest(files(bytes), 'src/main.ts', 'wit/world.wit'), /wit\/deps\/foo\.wasm is not a binary-encoded WIT package/);
+  }
+});
+
 test('folder import skips generated files and rejects excess input', async () => {
   const file = (name, contents, size = contents.length) => ({ webkitRelativePath: `project/${name}`, size, arrayBuffer: async () => encode(contents).buffer });
   const files = await readFolder([file('index.ts', 'source'), file('wit/main.wit', 'contract'), file('node_modules/huge.ts', '', 20_000_000)]);
