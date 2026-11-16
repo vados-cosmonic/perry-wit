@@ -43,10 +43,11 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "npm run build:wasm && npm run build:bindings && npm run build:ts",
+    "build": "npm run build:wasm && npm run build:bindings && npm run build:ts && npm run build:notices",
     "build:wasm": "node scripts/build-wasm.mjs",
     "build:bindings": "jco transpile wasm/perry-wit.wasm --name compiler --instantiation async --no-nodejs-compat --quiet --out-dir bindings && node scripts/finish-bindings.mjs",
     "build:ts": "tsc --project tsconfig.build.json",
+    "build:notices": "node scripts/write-notices.mjs",
     "typecheck": "tsc --project tsconfig.json",
     "test": "node --test \"test/*.ts\"",
     "clean": "node -e \"for (const d of ['dist','bindings','wasm','LICENSE','THIRD-PARTY-NOTICES.txt']) require('node:fs').rmSync(d,{recursive:true,force:true})\"",
