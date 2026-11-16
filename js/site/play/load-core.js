@@ -18,5 +18,12 @@ export async function loadCoreModule(name) {
   const slice = coreSlices[name];
   if (!slice) throw new Error(`Missing compiler slice for ${name}`);
   const bytes = await compilerBytes();
-  return WebAssembly.compile(bytes.subarray(slice.start, slice.end));
+  // WebKit (seen in Playwright's Linux build) can leave a finished compilation undelivered while
+  // the worker is otherwise idle, so keep a timer pending until the module arrives.
+  const awake = setInterval(() => {}, 50);
+  try {
+    return await WebAssembly.compile(bytes.subarray(slice.start, slice.end));
+  } finally {
+    clearInterval(awake);
+  }
 }
