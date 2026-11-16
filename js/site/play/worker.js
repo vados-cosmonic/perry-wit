@@ -9,6 +9,8 @@ import * as random from '@bytecodealliance/preview3-shim/random';
 
 const trace = message => postMessage({ kind: 'progress', message: `[t] ${message}` });
 trace('module evaluated');
+let beats = 0;
+setInterval(() => { if (++beats % 40 === 0) trace(`heartbeat ${beats}`); }, 50);
 const camel = name => name.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
 
 function applicationImports(names) {
