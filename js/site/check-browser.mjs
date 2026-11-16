@@ -198,6 +198,16 @@ try {
         assert.equal(await page.locator('#status').getAttribute('data-state'), 'complete', output);
         return output;
       };
+      // Playwright attaches its own `input` listener only after it starts a directory upload, so a small
+      // folder can be read first and leave setInputFiles waiting until it times out. Listen before uploading.
+      const openFolder = async path => {
+        const input = page.locator('#folder-input');
+        await input.evaluate(node => { node.uploaded = new Promise(resolve => node.addEventListener('input', resolve, { once: true })); });
+        const upload = input.setInputFiles(path);
+        await Promise.race([upload, input.evaluate(node => node.uploaded)]);
+        upload.catch(() => {});
+        await page.waitForFunction(() => document.getElementById('status').textContent === 'Folder loaded');
+      };
       await page.locator('#run').scrollIntoViewIfNeeded();
       const beforeRun = await page.locator('#run').evaluate(element => { const box = element.getBoundingClientRect(); return { x: box.x, y: box.y, scroll: scrollY }; });
       const shifts = [];
@@ -305,8 +315,7 @@ try {
       assert.match(await page.locator('#output').textContent(), /Warning: unknown identifier 'Missing'/, 'Upstream compiler stderr reaches diagnostics through WASI');
       await page.locator('#tab-result').click();
       await page.locator('#reset').click();
-      await page.locator('#folder-input').setInputFiles(join(repoRoot, 'examples'));
-      await page.waitForFunction(() => document.getElementById('status').textContent === 'Folder loaded');
+      await openFolder(join(repoRoot, 'examples'));
       assert.equal(await page.locator('#entry').inputValue(), 'merge_task/index.ts');
       const taskPackage = JSON.parse(await readFile(join(repoRoot, 'examples/merge_task/package.json'), 'utf8'));
       assert.equal(await page.locator('#folder-description').textContent(), taskPackage.description);
@@ -315,8 +324,7 @@ try {
       await page.locator('#entry').selectOption('merge_docs/index.ts');
       assert.equal(await page.locator('#world').inputValue(), 'merge-docs');
       assert.deepEqual(JSON.parse(await run()), mergedDocuments);
-      await page.locator('#folder-input').setInputFiles(join(repoRoot, 'examples/merge_task'));
-      await page.waitForFunction(() => document.getElementById('status').textContent === 'Folder loaded');
+      await openFolder(join(repoRoot, 'examples/merge_task'));
       assert.equal(await page.locator('#entry-picker').isVisible(), false);
       assert.deepEqual(JSON.parse(await run()), markdownExample);
       await page.locator('#function').selectOption('countCodePoints');
@@ -325,15 +333,13 @@ try {
       assert.equal(await page.locator('#function').isDisabled(), true);
       assert.match(await page.locator('#args-help').textContent(), /A title and an array/);
       assert.deepEqual(JSON.parse(await run()), markdownExample, 'Reset restores matching arguments and the default function for an imported package');
-      await page.locator('#folder-input').setInputFiles(join(fixtures, 'source-only'));
-      await page.waitForFunction(() => document.getElementById('status').textContent === 'Folder loaded');
+      await openFolder(join(fixtures, 'source-only'));
       assert.equal(await page.locator('#wit').inputValue(), '');
       assert.match(await page.locator('#folder-description').textContent(), /No WIT contract was included/);
       await page.locator('#wit').fill('package test:source; world app { export run: func(n: f64) -> f64; }');
       await page.locator('#args').fill('[21]');
       assert.equal(await run(), '42');
-      await page.locator('#folder-input').setInputFiles(fixtures);
-      await page.waitForFunction(() => document.getElementById('status').textContent === 'Folder loaded');
+      await openFolder(fixtures);
       assert.equal(await page.locator('#source-file-picker').isVisible(), true);
       assert.equal(await page.locator('#entry-picker').isVisible(), true);
       assert.equal(await page.locator('#wit-file-picker').isVisible(), false);
