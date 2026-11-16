@@ -98,8 +98,11 @@ let shared: Promise<Compiler> | undefined;
 
 /**
  * Run `use` with the shared compiler, loading it first if needed.
- * A failed load or a trap discards the shared compiler, so the next call loads a fresh one;
- * a {@link CompileError} leaves it in place.
+ * A failed load discards the shared compiler, and so does any error other than a {@link CompileError},
+ * so the next call loads a fresh one.
+ * Only a {@link CompileError} shows that the compiler returned normally:
+ * a trap, or a host exception such as the `RangeError` of an exhausted call stack,
+ * unwinds through the compiler's frames and leaves its memory in an unknown state.
  */
 async function withShared<T>(use: (compiler: Compiler) => T): Promise<T> {
   const loading = (shared ??= Compiler.load());

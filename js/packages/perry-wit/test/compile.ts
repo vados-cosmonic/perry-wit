@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { Compiler, compile, compileCore, CompileError, generateTypes } from "perry-wit";
+import { Compiler, compile, compileCore, CompileError, formatDiagnostics, generateTypes } from "perry-wit";
 
 const source = "export function run(n: number): number { return n * 2; }";
 const wit = "package test:double; world app { export run: func(n: f64) -> f64; }";
@@ -64,6 +64,20 @@ test("reports diagnostics as a CompileError", async () => {
   assert.equal(first.span?.file, "src/main.ts");
   assert.equal(typeof first.span?.startByte, "number");
   assert.match(error.message, /^src\/main\.ts:1:\d+: error\[/);
+  assert.equal(
+    formatDiagnostics([
+      {
+        code: "missing-required-field",
+        severity: "error",
+        message: "Missing value",
+        span: { file: "src/é.ts", startLine: 2, startColumn: 3, endLine: 2, endColumn: 8, startByte: 10, endByte: 15 },
+        notes: ["Record fields are mandatory"],
+        help: "Add value: null",
+      },
+      { code: "parse-error", severity: "error", message: "Unexpected token", notes: [] },
+    ]),
+    "src/é.ts:2:3: error[missing-required-field]: Missing value\n  Record fields are mandatory\n  help: Add value: null\nerror[parse-error]: Unexpected token",
+  );
 });
 
 test("generates declarations for a world", async () => {
@@ -76,6 +90,28 @@ test("a loaded compiler runs synchronously", async () => {
   const compiler = await Compiler.load();
   assert.ok(isComponent(compiler.compile({ source, wit }).component));
   assert.throws(() => compiler.compile({ source, wit: "package test:bad; world app { export missing: func(); }" }), CompileError);
+});
+
+test("the shared compiler is replaced after any error but a CompileError", async (t) => {
+  let loads = 0;
+  const load = Compiler.load;
+  t.mock.method(Compiler, "load", () => (loads++, load.call(Compiler)));
+  // A stand-in for a host exception thrown during a call, such as the RangeError of an exhausted call stack.
+  const exhausted = {
+    get source(): string {
+      throw new RangeError("Maximum call stack size exceeded");
+    },
+  };
+
+  await compileCore({ source });
+  const before = loads;
+  await assert.rejects(compileCore({ source: "export function run(n) { return n; }" }), CompileError);
+  await compileCore({ source });
+  assert.equal(loads, before, "a CompileError keeps the shared compiler");
+
+  await assert.rejects(compileCore(exhausted), RangeError);
+  await compileCore({ source });
+  assert.equal(loads, before + 1, "any other error loads a fresh compiler");
 });
 
 test("the documented example compiles a component", async () => {
