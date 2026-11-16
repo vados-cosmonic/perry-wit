@@ -7,6 +7,8 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { Compiler, compile, compileCore, CompileError, formatDiagnostics, generateTypes } from "perry-wit";
+// The host imports are internal to the package, so the test reads them from the build output.
+import { wasiImports } from "../dist/host.js";
 
 const source = "export function run(n: number): number { return n * 2; }";
 const wit = "package test:double; world app { export run: func(n: f64) -> f64; }";
@@ -39,16 +41,27 @@ test("compileCore exports raw TypeScript functions", async () => {
 });
 
 test("resolves supplied modules and WIT dependencies", async () => {
-  const { component } = await compile({
-    source: { path: "src/main.ts", contents: "import { twice } from './math.js'; export function run(n: number): number { return twice(n); }" },
-    modules: new Map([["src/math.ts", "export function twice(n: number): number { return n * 2; }"]]),
+  const grouped = {
     wit: [
       "package test:bundle; world app { use test:types/numbers.{number}; export run: func(n: number) -> number; }",
       { path: "extra.wit", contents: "package test:bundle; interface additional {}" },
     ],
     witDependencies: ["package test:types; interface numbers { type number = f64; }"],
+  };
+  const { component } = await compile({
+    source: { path: "src/main.ts", contents: "import { twice } from './math.js'; export function run(n: number): number { return twice(n); }" },
+    modules: new Map([["src/math.ts", "export function twice(n: number): number { return n * 2; }"]]),
+    ...grouped,
   });
   assert.ok(isComponent(component));
+  assert.equal((await generateTypes(grouped)).length, 3);
+});
+
+test("the compiler host grants no directories, arguments or environment variables", () => {
+  const imports = wasiImports() as unknown as Record<string, Record<string, () => unknown>>;
+  assert.deepEqual(imports["wasi:filesystem/preopens"]?.getDirectories?.(), []);
+  assert.deepEqual(imports["wasi:cli/environment"]?.getArguments?.(), []);
+  assert.deepEqual(imports["wasi:cli/environment"]?.getEnvironment?.(), []);
 });
 
 test("reports diagnostics as a CompileError", async () => {
