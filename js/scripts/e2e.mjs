@@ -1,9 +1,11 @@
 // End-to-end test of the published package:
-// pack perry-wit (its prepack script runs the complete build) or take an already packed tarball,
+// build and pack perry-wit or take an already packed tarball,
 // install the tarball into a fresh copy of e2e/consumer without running install scripts,
 // check which files the package ships, then type-check and run the consumer.
 //
 // Usage: node scripts/e2e.mjs [--tarball <path>] [--keep]
+// Without --tarball the script runs the complete build itself, because `ignore-scripts=true` in js/.npmrc
+// keeps `npm pack` from running the package's prepack script.
 // PERRY_COMPILER_WASM and the other build:wasm variables pass through to the build.
 import { spawnSync } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
@@ -26,6 +28,8 @@ const CONSUMER_DIR = join(WORKSPACE_DIR, 'e2e/consumer');
 const REQUIRED_FILES = [
   'package.json',
   'README.md',
+  'LICENSE',
+  'THIRD-PARTY-NOTICES.txt',
   'dist/index.js',
   'dist/index.d.ts',
   'dist/load-core.node.js',
@@ -38,8 +42,16 @@ const REQUIRED_FILES = [
   'bindings/compiler.core.wasm',
 ];
 
-/** Top-level entries the tarball must not contain. */
-const FORBIDDEN_ENTRIES = ['test', 'examples', 'scripts', 'wasm', 'node_modules', 'tsconfig.json', 'tsconfig.build.json'];
+/** Top-level files and directories the tarball may contain; anything else (such as `site` or `test`) is rejected. */
+const ALLOWED_ENTRIES = new Set([
+  'package.json',
+  'README.md',
+  'LICENSE',
+  'THIRD-PARTY-NOTICES.txt',
+  'dist',
+  'src',
+  'bindings',
+]);
 
 /** A failure with a message that says everything, printed without a stack trace. */
 class ScriptError extends Error {}
@@ -70,10 +82,15 @@ async function main(args) {
   }
 }
 
-/** Pack the package into `packDir`, which runs its complete build, and return the tarball's path. */
+/**
+ * Build the package, pack it into `packDir` and return the tarball's path.
+ * The build is explicit and `npm pack` skips lifecycle scripts, as in the Nix build:
+ * js/.npmrc sets `ignore-scripts=true`, so prepack would not build, and overriding that would build twice.
+ */
 async function pack(packDir) {
   await mkdir(packDir, { recursive: true });
-  run(NPM, ['pack', '--pack-destination', packDir], PACKAGE_DIR);
+  run(NPM, ['run', 'build'], PACKAGE_DIR);
+  run(NPM, ['pack', '--ignore-scripts', '--pack-destination', packDir], PACKAGE_DIR);
   const [tarball] = (await readdir(packDir)).filter(name => name.endsWith('.tgz'));
   if (!tarball) throw new ScriptError(`npm pack wrote no tarball to ${packDir}`);
   return join(packDir, tarball);
@@ -86,9 +103,12 @@ async function checkPackageFiles(installed) {
     .filter(entry => entry.isFile())
     .map(entry => relative(root, join(entry.parentPath, entry.name)).split('\\').join('/'));
   const missing = REQUIRED_FILES.filter(file => !files.includes(file));
-  const unexpected = files.filter(file => FORBIDDEN_ENTRIES.includes(file.split('/')[0]));
+  const unexpected = files.filter(file => !ALLOWED_ENTRIES.has(file.split('/')[0]));
   if (missing.length > 0) throw new ScriptError(`the package is missing ${missing.join(', ')}`);
   if (unexpected.length > 0) throw new ScriptError(`the package ships ${unexpected.join(', ')}`);
+  const { dependencies = {} } = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
+  const unexpectedDeps = Object.keys(dependencies).filter(name => name !== '@bytecodealliance/preview2-shim');
+  if (unexpectedDeps.length > 0) throw new ScriptError(`the package declares unexpected runtime dependencies: ${unexpectedDeps.join(', ')}`);
   const dangling = await danglingSourceMaps(root, files);
   if (dangling.length > 0) throw new ScriptError(`source maps name files the package does not ship: ${dangling.join(', ')}`);
   console.error(`${NAME}: the package ships ${files.length} files`);
