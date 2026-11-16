@@ -69,6 +69,8 @@ async function main(args) {
     const consumer = join(directory, 'consumer');
     await cp(CONSUMER_DIR, consumer, { recursive: true, filter: source => !/[\\/]node_modules$/.test(source) });
     await copyFile(tarball ?? (await pack(join(directory, 'pack'))), join(consumer, 'perry-wit.tgz'));
+    // The copy is outside the workspace, so the workspace's supply-chain policy has to travel with it.
+    await copyFile(join(WORKSPACE_DIR, '.npmrc'), join(consumer, '.npmrc'));
 
     run(NPM, INSTALL_ARGS, consumer);
     await checkPackageFiles(join(consumer, 'node_modules/perry-wit'));
