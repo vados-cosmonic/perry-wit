@@ -1,5 +1,6 @@
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8', { fatal: true });
+const wasmMagic = [0x00, 0x61, 0x73, 0x6d];
 const skipped = new Set(['.git', '.direnv', '.perry', 'target', 'node_modules', 'dist', 'build', 'vendor']);
 export const encode = text => encoder.encode(text);
 export const decode = bytes => decoder.decode(bytes);
@@ -38,24 +39,30 @@ export function compileRequest(files, entry, witFile, world) {
   const dependencyRoot = root ? `${root}/deps/` : 'deps/';
   const packages = new Map();
   const encoded = [];
-  const application = [];
-  const modules = [];
+  const wit = [];
+  const modules = new Map();
   for (const [name, contents] of [...files].sort(([a], [b]) => a.localeCompare(b))) {
-    if (name.endsWith('.ts') && name !== entry) modules.push({ name, contents });
+    if (name.endsWith('.ts') && name !== entry) modules.set(name, contents);
     if (name.endsWith('.wit')) {
-      const source = { name, contents };
-      if (directory(name) === root) application.push(source);
+      const source = { path: name, contents };
+      if (directory(name) === root) wit.push(source);
       else if (name.startsWith(dependencyRoot)) {
         const group = directory(name);
         if (!packages.has(group)) packages.set(group, []);
         packages.get(group).push(source);
       }
-    } else if (name.startsWith(dependencyRoot) && name.endsWith('.wasm')) encoded.push({ tag: 'encoded', val: contents });
+    } else if (name.startsWith(dependencyRoot) && name.endsWith('.wasm')) {
+      // perry-wit takes bytes without the `\0asm` header for WIT text, and would report a WIT parse error naming no file.
+      if (!wasmMagic.every((byte, index) => contents[index] === byte)) throw new Error(`${name} is not a binary-encoded WIT package.`);
+      encoded.push(contents);
+    }
   }
   return {
-    program: { source: { name: entry, contents: files.get(entry) }, modules },
-    wit: { application: { tag: 'sources', val: application }, dependencies: [...packages.values()].map(val => ({ tag: 'sources', val })).concat(encoded) },
-    options: { world: world || undefined, coreOnly: false },
+    source: { path: entry, contents: files.get(entry) },
+    modules,
+    wit,
+    witDependencies: [...packages.values(), ...encoded],
+    world: world || undefined,
   };
 }
 

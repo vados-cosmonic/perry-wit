@@ -5,11 +5,20 @@ import { compileRequest, encode, packagePrograms, readFolder, worldNames } from 
 test('module identities and grouped WIT are passed as byte buffers', () => {
   const files = new Map(['src/main.ts', 'src/util.ts', 'wit/world.wit', 'wit/types.wit', 'wit/deps/math/a.wit', 'wit/deps/math/b.wit'].map(name => [name, encode(name)]));
   const request = compileRequest(files, 'src/main.ts', 'wit/world.wit', 'app');
-  assert.equal(request.program.source.name, 'src/main.ts');
-  assert.equal(request.program.modules[0].name, 'src/util.ts');
-  assert.equal(request.wit.application.val.length, 2);
-  assert.equal(request.wit.dependencies[0].val.length, 2);
-  assert(request.program.source.contents instanceof Uint8Array);
+  assert.equal(request.source.path, 'src/main.ts');
+  assert(request.modules.get('src/util.ts') instanceof Uint8Array);
+  assert.equal(request.wit.length, 2);
+  assert.equal(request.witDependencies[0].length, 2);
+  assert(request.source.contents instanceof Uint8Array);
+});
+
+test('encoded WIT dependencies must be WebAssembly binaries', () => {
+  const files = bytes => new Map([['src/main.ts', encode('source')], ['wit/world.wit', encode('contract')], ['wit/deps/foo.wasm', bytes]]);
+  const binary = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x0d, 0x00, 0x01, 0x00]);
+  assert.deepEqual(compileRequest(files(binary), 'src/main.ts', 'wit/world.wit').witDependencies, [binary]);
+  for (const bytes of [new Uint8Array(0), binary.subarray(0, 3), encode('package test:types;')]) {
+    assert.throws(() => compileRequest(files(bytes), 'src/main.ts', 'wit/world.wit'), /wit\/deps\/foo\.wasm is not a binary-encoded WIT package/);
+  }
 });
 
 test('folder import skips generated files and rejects excess input', async () => {
