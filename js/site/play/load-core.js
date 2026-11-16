@@ -1,6 +1,7 @@
 import { coreSlices } from '../.generated/compiler-slices.js';
 
 let bytesPromise;
+let chain = Promise.resolve();
 const trace = message => postMessage({ kind: 'progress', message: `[t] ${message}` });
 
 /** Fetch the downloadable compiler component once per worker so the site ships a single binary. */
@@ -24,7 +25,7 @@ export async function loadCoreModule(name) {
   if (!slice) throw new Error(`Missing compiler slice for ${name}`);
   const bytes = await compilerBytes();
   trace(`compile ${name}`);
-  const module = await WebAssembly.compile(bytes.subarray(slice.start, slice.end));
+  const module = await (chain = chain.then(() => WebAssembly.compile(bytes.subarray(slice.start, slice.end))));
   trace(`compiled ${name}`);
   return module;
 }
