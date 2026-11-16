@@ -1,9 +1,11 @@
 // End-to-end test of the published package:
-// pack perry-wit (its prepack script runs the complete build) or take an already packed tarball,
+// build and pack perry-wit or take an already packed tarball,
 // install the tarball into a fresh copy of e2e/consumer without running install scripts,
 // check which files the package ships, then type-check and run the consumer.
 //
 // Usage: node scripts/e2e.mjs [--tarball <path>] [--keep]
+// Without --tarball the script runs the complete build itself, because `ignore-scripts=true` in js/.npmrc
+// keeps `npm pack` from running the package's prepack script.
 // PERRY_COMPILER_WASM and the other build:wasm variables pass through to the build.
 import { spawnSync } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
@@ -80,10 +82,15 @@ async function main(args) {
   }
 }
 
-/** Pack the package into `packDir`, which runs its complete build, and return the tarball's path. */
+/**
+ * Build the package, pack it into `packDir` and return the tarball's path.
+ * The build is explicit and `npm pack` skips lifecycle scripts, as in the Nix build:
+ * js/.npmrc sets `ignore-scripts=true`, so prepack would not build, and overriding that would build twice.
+ */
 async function pack(packDir) {
   await mkdir(packDir, { recursive: true });
-  run(NPM, ['pack', '--pack-destination', packDir], PACKAGE_DIR);
+  run(NPM, ['run', 'build'], PACKAGE_DIR);
+  run(NPM, ['pack', '--ignore-scripts', '--pack-destination', packDir], PACKAGE_DIR);
   const [tarball] = (await readdir(packDir)).filter(name => name.endsWith('.tgz'));
   if (!tarball) throw new ScriptError(`npm pack wrote no tarball to ${packDir}`);
   return join(packDir, tarball);

@@ -7,6 +7,7 @@
 - `e2e/consumer` — standalone consumer project used by `scripts/e2e.mjs` to test the packed tarball
 
 `js/.npmrc` enforces `ignore-scripts=true` and `min-release-age=7` across the workspace.
+That setting also skips the workspace's own lifecycle scripts, so `npm pack` and `npm publish` do not run `perry-wit`'s `prepack` build: build explicitly first (see [Packing](#packing)).
 
 ## Hermetic Nix Builds
 
@@ -34,7 +35,7 @@ npm --prefix js ci
 npm --prefix js run build       # builds wasm, Jco bindings, and TypeScript
 npm --prefix js run typecheck
 npm --prefix js test
-npm --prefix js run test:e2e
+npm --prefix js run test:e2e    # builds, packs, and tests the tarball in a fresh consumer project
 ```
 
 Setting `PERRY_COMPILER_WASM` skips rebuilding the Wasm compiler with Cargo:
@@ -43,6 +44,17 @@ Setting `PERRY_COMPILER_WASM` skips rebuilding the Wasm compiler with Cargo:
 PERRY_COMPILER_WASM="$(nix build .#perry-wit-wasm --print-out-paths)/lib/perry-wit.wasm" \
   npm --prefix js run build
 ```
+
+## Packing
+
+`npm pack` and `npm publish` package whatever `dist/` and `bindings/` currently hold, or nothing when they are missing, because `ignore-scripts=true` disables `prepack`.
+Always build in the same command:
+
+```sh
+npm --prefix js run build && npm --prefix js pack --workspace=perry-wit
+```
+
+`nix build .#npm-package` and `npm --prefix js run test:e2e` already build before packing.
 
 ## Browser Verification
 
