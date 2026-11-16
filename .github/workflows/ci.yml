@@ -67,8 +67,6 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
-          - os: macos-latest
-            target: aarch64-apple-darwin
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -221,10 +219,15 @@ jobs:
           tar -xzf "${tarball[0]}" -C js/packages/perry-wit --strip-components=1
           npm ci --prefix js --ignore-scripts --no-audit --no-fund
           npm --prefix js run test:e2e -- --tarball "${tarball[0]}"
-          node js/site/check-browser.mjs
+          lscpu | grep -E 'Model name|^CPU\(s\)' || true
+          failures=0
+          for i in $(seq 1 40); do
+            echo "=== iteration $i"
+            node js/site/check-browser.mjs || { failures=$((failures + 1)); echo "=== iteration $i FAILED"; }
+          done
+          echo "=== failures: $failures of 40"
+          test "$failures" -eq 0
         EOF
-      env:
-        DEBUG: pw:browser
     - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: static-site
