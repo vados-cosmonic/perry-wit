@@ -7,6 +7,8 @@ import * as clocks from '@bytecodealliance/preview3-shim/clocks';
 import * as http from '@bytecodealliance/preview3-shim/http';
 import * as random from '@bytecodealliance/preview3-shim/random';
 
+const trace = message => postMessage({ kind: 'progress', message: `[t] ${message}` });
+trace('module evaluated');
 const camel = name => name.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
 
 function applicationImports(names) {
@@ -48,6 +50,7 @@ function callableExports(generated, exports) {
 self.onmessage = async ({ data }) => {
   const send = (kind, result) => postMessage({ kind, id: data.id, ...result });
   const progress = message => send('progress', { message });
+  trace('message received');
   let log = '';
   let phase = 'load';
   const decoder = new TextDecoder();
@@ -58,6 +61,7 @@ self.onmessage = async ({ data }) => {
   compilerCli._setStderr(output);
   try {
     const compiler = await Compiler.load();
+    trace('compiler loaded');
     if (data.action === 'generate-sdk') {
       phase = 'generate-sdk';
       send('sdk', { files: compiler.generateTypes(data) });
@@ -71,11 +75,15 @@ self.onmessage = async ({ data }) => {
     send('compiled', { bytes, coreSize: compiled.core.length, allocationReport: compiled.allocationReport, elapsed: performance.now() - started });
     progress('Inspecting component…');
     phase = 'inspect';
-    await Promise.all([toolsReady, bindgenReady]);
+    await toolsReady; trace('tools ready');
+    await bindgenReady; trace('bindgen ready');
     const generated = await generate(bytes, { name: 'application', instantiation: { tag: 'async' }, noTypescript: true, noNodejsCompat: true, base64Cutoff: 0 });
+    trace('generated');
     send('inspection', { wat: tools.print(bytes), interface: tools.componentWit(bytes) });
+    trace('inspected');
     const functions = callableExports(generated, await instantiateComponent(generated));
     send('exports', { names: [...functions.keys()] });
+    trace('instantiated');
     let result = 'Compiled successfully. Download the component or select Compile & run.';
     let needsExport = false;
     if (data.run) {

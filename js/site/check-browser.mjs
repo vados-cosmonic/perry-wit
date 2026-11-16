@@ -49,7 +49,10 @@ for (const file of await readdir(packageBindingsDir)) {
 await mkdir(resultsDir, { recursive: true });
 
 try {
-  for (const [name, engine] of [['chromium', chromium], ['webkit', webkit]]) {
+  const selected = (process.env.BROWSERS || 'chromium,webkit').split(',');
+  for (const [name, engine] of [['chromium', chromium], ['webkit', webkit]].filter(([name]) => selected.includes(name))) {
+    let dump;
+    const netLog = [];
     const browser = await engine.launch({ executablePath: process.env[`${name.toUpperCase()}_EXECUTABLE`] });
     try {
       const context = await browser.newContext({ viewport: { width: 1280, height: 1000 }, acceptDownloads: true, serviceWorkers: 'block' });
@@ -91,6 +94,7 @@ try {
       // Route static files directly: no development server is started or changed.
       await context.route(`${origin}/**`, async route => {
         const url = new URL(route.request().url()); requests.push(url.pathname);
+        const entry = { start: Date.now(), path: url.pathname.slice(prefix.length), type: route.request().resourceType() }; netLog.push(entry);
         if (url.pathname.includes('/assets/') || url.pathname.endsWith('/downloads/perry-wit.wasm')) assetVersions.push(url.searchParams.get('v'));
         if (!url.pathname.startsWith(prefix)) return route.fulfill({ status: 404, body: 'Outside repository path' });
         if (compilerFailure && url.pathname.endsWith('/downloads/perry-wit.wasm')) return route.fulfill({ status: 503 });
@@ -98,8 +102,8 @@ try {
         if (path.endsWith('/') || !path) path += 'index.html';
         if (path.split('/').includes('..')) return route.abort();
         if (path === 'style.css') await delay(100);
-        try { await route.fulfill({ body: await readFile(join(directory, path)), contentType: mime[extname(path)] || 'application/octet-stream' }); }
-        catch { await route.fulfill({ status: 404, body: `Missing ${path}` }); }
+        try { await route.fulfill({ body: await readFile(join(directory, path)), contentType: mime[extname(path)] || 'application/octet-stream' }); entry.done = Date.now(); }
+        catch (error) { entry.error = String(error); await route.fulfill({ status: 404, body: `Missing ${path}` }); }
       });
       let documentFailure = null;
       let largeResponse = false;
@@ -119,6 +123,24 @@ try {
       await context.route('https://esm.sh/**', route => route.abort());
       const page = await context.newPage();
       page.on('pageerror', error => console.error(name, error));
+      page.on('console', message => netLog.push({ start: Date.now(), console: `${message.type()}: ${message.text()}` }));
+      page.on('requestfailed', request => netLog.push({ start: Date.now(), failed: request.url(), reason: request.failure()?.errorText }));
+      page.on('requestfinished', request => netLog.push({ start: Date.now(), finished: request.url().slice(-50) }));
+      page.on('worker', worker => { netLog.push({ start: Date.now(), worker: worker.url() }); worker.on('close', () => netLog.push({ start: Date.now(), workerClosed: worker.url() })); });
+      await page.addInitScript(() => {
+        addEventListener('DOMContentLoaded', () => {
+          const element = document.getElementById('status');
+          if (!element) return;
+          window.__statusLog = [];
+          new MutationObserver(() => { window.__statusLog.push([Date.now(), element.dataset.state, element.textContent]); if (window.__statusLog.length > 400) window.__statusLog.splice(0, 200); }).observe(element, { childList: true, characterData: true, subtree: true, attributes: true });
+        });
+      });
+      dump = async () => {
+        const now = Date.now();
+        console.error(`DIAG ${name} now=${now}`);
+        try { for (const [at, state, text] of (await page.evaluate(() => window.__statusLog || [])).slice(-80)) console.error(`DIAG status ${at - now} ${state} ${text}`); } catch (error) { console.error('DIAG status unavailable', error); }
+        for (const entry of netLog.filter(entry => entry.start > now - 50_000)) console.error(`DIAG net ${entry.start - now} ${JSON.stringify({ ...entry, start: undefined, done: entry.done === undefined ? undefined : entry.done - entry.start })}`);
+      };
       await page.goto(`${origin}${prefix}`);
       assert(!requests.some(path => /\.wasm$|\/assets\//.test(path)), 'Homepage must not load the compiler or playground assets');
       assert.deepEqual(requests.filter(path => /\.js$/.test(path)), [], 'Homepage must not load JavaScript');
@@ -406,6 +428,6 @@ try {
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'Mobile homepage overflows');
       await page.screenshot({ path: join(resultsDir, `${name}-home-mobile.png`), fullPage: true });
       console.log(`${name}: bundled perry-wit loader, examples, world choices, actionable errors, argument presets, reset, keyboard, folder imports, cancellation, downloads, mobile/dark layouts and repository path passed`);
-    } finally { await browser.close(); }
+    } catch (error) { await dump?.(); throw error; } finally { await browser.close(); }
   }
 } finally { await rm(fixtures, { recursive: true, force: true }); }
