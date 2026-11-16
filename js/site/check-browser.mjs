@@ -234,7 +234,7 @@ try {
       const [sdk, sdkError] = await page.evaluate(async version => {
         const worker = new Worker(`./assets/worker.js?v=${version}`, { type: 'module' });
         const request = data => new Promise((resolve, reject) => {
-          worker.onmessage = ({ data }) => resolve(data);
+          worker.onmessage = ({ data }) => { if (data.kind !== 'progress') resolve(data); };
           worker.onerror = event => reject(new Error(event.message));
           worker.postMessage(data);
         });
