@@ -220,11 +220,11 @@ jobs:
           npm ci --prefix js --ignore-scripts --no-audit --no-fund
           npm --prefix js run test:e2e -- --tarball "${tarball[0]}"
           failures=0
-          for i in $(seq 1 20); do
+          for i in $(seq 1 40); do
             echo "=== iteration $i"
             BROWSERS=webkit node js/site/check-browser.mjs || { failures=$((failures + 1)); echo "=== iteration $i FAILED"; }
           done
-          echo "=== failures: $failures of 20"
+          echo "=== failures: $failures of 40"
           test "$failures" -eq 0
         EOF
     - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

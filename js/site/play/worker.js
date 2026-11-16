@@ -9,6 +9,8 @@ import * as random from '@bytecodealliance/preview3-shim/random';
 
 const trace = message => postMessage({ kind: 'progress', message: `[t] ${message}` });
 trace('module evaluated');
+toolsReady.then(() => trace('tools compiled'), error => trace(`tools failed ${error}`));
+bindgenReady.then(() => trace('bindgen compiled'), error => trace(`bindgen failed ${error}`));
 const camel = name => name.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
 
 function applicationImports(names) {
