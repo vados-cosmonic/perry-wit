@@ -27,6 +27,135 @@ wasmtime run -C cache=n -S p3=y -W component-model-async=y --invoke 'run-task("h
 - `--core-only` emits the standalone core WebAssembly module. `--keep-names` preserves function names in the custom `name` section for guest profiling.
 - WASI 0.3 packages resolve from `WASI_WIT_PATH`. Packages in `wit/deps` take precedence over them.
 
+### Exported Interfaces
+
+A function of an exported interface binds to an exported function named after both: `add` of `interface math` is `mathAdd`.
+The entry module may instead export one object per interface, as components written for `jco componentize` do:
+
+```wit
+interface math {
+  add: func(x: u32, y: u32) -> u32;
+}
+
+world calculator {
+  export math;
+}
+```
+
+```ts
+export const math = {
+  add(x: number, y: number): number {
+    return x + y;
+  },
+};
+```
+
+- The object is named after the interface in `camelCase`, without its package. It may be declared first and exported with `export { implementation as math }`.
+- A property is a method, an arrow function, a function expression, or the name of a function declaration.
+- Inside the object, `this.member` and `math.member` reach the other properties. Properties the interface does not declare stay internal.
+- The object exists only in source. The compiler rewrites it to the exported functions above, so it cannot be passed around as a value.
+- A function the world exports directly may be written `export const run = () => { ... }`.
+
+### Untyped Exports
+
+The world states each export's signature, so an export may leave its parameter and return types out.
+The compiler takes them from the WIT function, which lets a plain JavaScript entry module implement a world:
+
+```js
+export const math = {
+  add(x, y) {
+    return x + y;
+  },
+};
+```
+
+- Types the source declares are kept. Only missing annotations are filled in.
+- The return type of a `result` or `option` export is left to inference, since the source may spell it more than one way.
+- Only exports are typed this way. Other functions and local variables still need types the compiler can infer.
+- An export that declares more parameters than its WIT function is rejected.
+
+### Imported Resources
+
+An imported WIT resource is an opaque value, and its constructor, methods and static functions are imported functions that take it.
+A module that exports an interface as an object, or imports a resource by name, may use the resource as a class instead:
+
+```wit
+interface counters {
+  resource counter {
+    constructor(start: u32);
+    value: func() -> u32;
+    checked: func() -> result<u32, string>;
+    make: static func(start: u32) -> counter;
+  }
+  all: func() -> list<counter>;
+}
+```
+
+```ts
+import { Counter, all } from 'example:app/counters';
+
+export function run(): number {
+  using first = new Counter(1);
+  const second = Counter.make(2);
+  return first.value() + second.checked() + all().length;
+}
+```
+
+- `new`, method calls and static calls map to the resource's WIT functions. The class name is also the resource's type.
+- `using` and `value[Symbol.dispose]()` drop the resource.
+- A function or method declared to return a WIT `result` returns its payload and throws its error. A `result` passed as a value is `{ tag: 'ok', val }` or `{ tag: 'err', val }`.
+- Resources convert wherever they appear: in lists, tuples, records, variants and options, and in the parameters and results of exports.
+- An `option` argument of an imported function, constructor or method may be `undefined` as well as `null`. An `option` the component receives is `null` when empty.
+- Only the entry module's imports are converted. Other modules can receive and use the class instances.
+- A module that does neither keeps the opaque values: it passes them to imported functions and drops one with the generated `dropCounter(value)`.
+
+### Sleeping
+
+`setTimeout` from `node:timers/promises` returns a promise. There are no callback timers and no `Promise` constructor, except in the portable way to sleep, which compiles to the same timer:
+
+```ts
+await new Promise((resolve) => setTimeout(resolve, 1000));
+```
+
+The timer's callback may also be a function that only calls `resolve()`. The world needs to import the clock, as for any timer.
+
+### Exported Resources
+
+A resource of an exported interface is implemented by a class named in the interface's export object, under the resource's PascalCase name:
+
+```wit
+interface counters {
+  resource counter {
+    constructor(start: u32);
+    get: func() -> u32;
+    make: static func(start: u32) -> counter;
+  }
+  total: func(items: list<borrow<counter>>) -> u32;
+}
+```
+
+```ts
+class Counter {
+  #value: number;
+  constructor(start: number) { this.#value = start; }
+  get() { return this.#value; }
+  static make(start: number) { return new Counter(start); }
+  [Symbol.dispose]() { /* the host dropped this counter */ }
+}
+
+export const counters = {
+  Counter,
+  total(items: Counter[]) { return items.reduce((sum, item) => sum + item.get(), 0); },
+};
+```
+
+- The property may name a class declared in the entry module, under any name, or hold a class expression.
+- The constructor, methods and static methods implement the resource's WIT functions, and take their types from them where the class declares none. Every WIT method needs one.
+- Exports take and return instances wherever the resource appears. Each instance returned becomes a new handle.
+- When the host drops a handle, the instance's `[Symbol.dispose]` method runs, if it has one. An instance passed to an export as an owned argument is consumed without being disposed.
+- Fields the constructor assigns from its parameters or from literals need no declaration. `#private` members compile as ordinary members.
+- A module may instead export the resource's functions itself, over the opaque values: `countersConstructorCounter`, `countersMethodCounterGet(self)` and `countersStaticCounterMake`, with `newCounter(representation)` and `counterRep(value)` from `example:app/counters`. An exported `countersDtorCounter(representation)` runs when a handle is dropped.
+
 ## Generated Types
 
 `perry-wit gen-types` writes `.d.ts` declarations for a world's imports and exports, plus a `tsconfig.json` that checks the entry module against them:
@@ -102,6 +231,26 @@ wasmtime serve -S p3=y -W component-model-async=y handler.wasm
 
 The adapter reads the whole request body before calling `handle`.
 An uncaught exception becomes a `500` response, and the instance keeps serving later requests.
+
+### Fetch Listeners
+
+A world that exports `wasi:http/incoming-handler@0.2` is implemented by an `incomingHandler` export object whose `handle(request, responseOut)` uses the resource classes of `wasi:http/types`.
+A module without that object may register a `fetch` listener instead, at its top level:
+
+```ts
+async function reply(request: Request): Promise<Response> {
+  const name = (await request.text()) || "world";
+  return new Response(`Hello ${name}\n`, { headers: { "content-type": "text/plain" } });
+}
+
+addEventListener("fetch", (event) => event.respondWith(reply(event.request)));
+```
+
+- The listener is a function, or the name of a function declared in the module, taking the event. `self.addEventListener` and `globalThis.addEventListener` register it too.
+- Its last statement calls `event.respondWith` with a `Response` or a promise of one. An immediately called function, as in `event.respondWith((async () => { ... })())`, is accepted.
+- `event.request` is a `Request` with the method, URL, headers and body of the incoming request. The whole body is read before the listener runs.
+- The response's status and body are sent, with these headers when it sets them: the `content-*` headers `type`, `encoding`, `language`, `disposition`, `location`, `range` and `security-policy`, `cache-control`, `location`, `set-cookie`, `etag`, `last-modified`, `expires`, `vary`, `allow`, `link`, `retry-after`, `www-authenticate`, `accept-ranges`, the `access-control-*` response headers, `strict-transport-security`, `x-content-type-options` and `x-frame-options`. Other headers are not sent: a `Headers` value cannot be enumerated yet.
+- A listener that throws, or whose promise rejects, produces a `500` response.
 
 ## New Projects
 

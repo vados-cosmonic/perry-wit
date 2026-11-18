@@ -1,4 +1,5 @@
 //! Source types and ownership helpers for a resolved component contract.
+mod conventions;
 mod types;
 
 use crate::hir::{Foreign, FunctionType, Type as HirType};
@@ -13,6 +14,7 @@ use wit_parser::{Function, Resolve, TypeId, WorldId};
 #[derive(Default)]
 pub struct WorldTypes {
     foreign: HashMap<String, Foreign>,
+    conventions: crate::conventions::World,
 }
 
 pub enum ResourceOperation {
@@ -31,7 +33,21 @@ impl WorldTypes {
     pub fn new(resolve: &Resolve, world: Option<WorldId>) -> Self {
         Self {
             foreign: types::foreign(resolve, world),
+            conventions: Default::default(),
         }
+        .with_conventions(resolve, world)
+    }
+
+    fn with_conventions(mut self, resolve: &Resolve, world: Option<WorldId>) -> Self {
+        if let Some(world) = world {
+            self.conventions = conventions::world(resolve, world, &self.foreign);
+        }
+        self
+    }
+
+    /// The selected world's exports, imports and resources as a source may name them.
+    pub fn conventions(&self) -> &crate::conventions::World {
+        &self.conventions
     }
 
     pub fn foreign(&self) -> &HashMap<String, Foreign> {

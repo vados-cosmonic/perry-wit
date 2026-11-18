@@ -1,0 +1,750 @@
+[
+  {
+    "set": "example",
+    "name": "add",
+    "status": "compiled",
+    "codes": [],
+    "detail": ""
+  },
+  {
+    "set": "example",
+    "name": "adder",
+    "status": "compiled",
+    "codes": [],
+    "detail": ""
+  },
+  {
+    "set": "example",
+    "name": "browser-p2-shims",
+    "status": "rejected",
+    "codes": [
+      "missing-type-annotation"
+    ],
+    "detail": "missing-type-annotation: the value type cannot be inferred for the MIR backend"
+  },
+  {
+    "set": "example",
+    "name": "builtin-bundle-ts",
+    "status": "compiled",
+    "codes": [],
+    "detail": ""
+  },
+  {
+    "set": "example",
+    "name": "fs-write-file",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: method openAt is not supported on record yet"
+  },
+  {
+    "set": "example",
+    "name": "host-logging",
+    "status": "compiled",
+    "codes": [],
+    "detail": ""
+  },
+  {
+    "set": "example",
+    "name": "http-hello-world",
+    "status": "compiled",
+    "codes": [],
+    "detail": ""
+  },
+  {
+    "set": "example",
+    "name": "http-server-fetch-handler",
+    "status": "compiled",
+    "codes": [],
+    "detail": ""
+  },
+  {
+    "set": "example",
+    "name": "http-server-hono",
+    "status": "skipped",
+    "codes": [],
+    "detail": "depends on the hono npm package, which needs a bundler"
+  },
+  {
+    "set": "example",
+    "name": "http-server-hono-with-bindings",
+    "status": "skipped",
+    "codes": [],
+    "detail": "depends on the hono npm package, which needs a bundler"
+  },
+  {
+    "set": "example",
+    "name": "native-messaging",
+    "status": "rejected",
+    "codes": [
+      "missing-type-annotation"
+    ],
+    "detail": "missing-type-annotation: the value type cannot be inferred for the MIR backend"
+  },
+  {
+    "set": "example",
+    "name": "node-compat",
+    "status": "skipped",
+    "codes": [],
+    "detail": "the entry module does not exist"
+  },
+  {
+    "set": "example",
+    "name": "node-fetch",
+    "status": "rejected",
+    "codes": [
+      "codegen-failure"
+    ],
+    "detail": "codegen-failure: lowering async function simpleRequestGetJson to wasm"
+  },
+  {
+    "set": "example",
+    "name": "node-grpc-server",
+    "status": "rejected",
+    "codes": [
+      "module-resolution"
+    ],
+    "detail": "module-resolution: Cannot resolve './gen/example/greeter/v1/greeter_pb.js' from server.js"
+  },
+  {
+    "set": "example",
+    "name": "node-mcp-server",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: Readable from stream is not supported yet"
+  },
+  {
+    "set": "example",
+    "name": "nodejs-platform",
+    "status": "rejected",
+    "codes": [
+      "missing-type-annotation"
+    ],
+    "detail": "missing-type-annotation: the value type cannot be inferred for the MIR backend"
+  },
+  {
+    "set": "example",
+    "name": "p3-stream-echo-qjs",
+    "status": "skipped",
+    "codes": [],
+    "detail": "written for the QuickJS backend"
+  },
+  {
+    "set": "example",
+    "name": "script-only-pipeline/dataset.ts",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: MIR backend does not support expression GlobalGet(0) yet"
+  },
+  {
+    "set": "example",
+    "name": "script-only-pipeline/geoip.ts",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: MIR backend does not support expression GlobalGet(0) yet"
+  },
+  {
+    "set": "example",
+    "name": "script-only-pipeline/risk-score.ts",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: MIR backend does not support expression GlobalGet(0) yet"
+  },
+  {
+    "set": "example",
+    "name": "script-only-pipeline/top-pages.ts",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: MIR backend does not support expression GlobalGet(0) yet"
+  },
+  {
+    "set": "example",
+    "name": "string-reverse",
+    "status": "compiled",
+    "codes": [],
+    "detail": ""
+  },
+  {
+    "set": "example",
+    "name": "string-reverse-upper",
+    "status": "compiled",
+    "codes": [],
+    "detail": ""
+  },
+  {
+    "set": "example",
+    "name": "ts-resource-export",
+    "status": "compiled",
+    "codes": [],
+    "detail": ""
+  },
+  {
+    "set": "example",
+    "name": "ts-resource-import",
+    "status": "rejected",
+    "codes": [
+      "codegen-failure"
+    ],
+    "detail": "codegen-failure: lowering function runRun to wasm"
+  },
+  {
+    "set": "example",
+    "name": "typegen-async-export",
+    "status": "rejected",
+    "codes": [
+      "codegen-failure"
+    ],
+    "detail": "codegen-failure: lowering async function __perry_integer_1_exampleSlowDouble to wasm"
+  },
+  {
+    "set": "example",
+    "name": "webidl-book-library",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: static field __jco_WebidlPkgGlobalBookLibraryBookManager.NonFiction not found"
+  },
+  {
+    "set": "example",
+    "name": "wintertc",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: MIR backend does not support unresolved generic type ReadableStreamDefaultController"
+  },
+  {
+    "set": "fixture",
+    "name": "local-dependency",
+    "status": "compiled",
+    "codes": [],
+    "detail": ""
+  },
+  {
+    "set": "fixture",
+    "name": "node-assert",
+    "status": "rejected",
+    "codes": [
+      "missing-type-annotation"
+    ],
+    "detail": "missing-type-annotation: the value type cannot be inferred for the MIR backend"
+  },
+  {
+    "set": "fixture",
+    "name": "node-buffer",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: failed to lower source.js: The requested module 'node:buffer' does not provide an export named 'SlowBuffer'"
+  },
+  {
+    "set": "fixture",
+    "name": "node-child-process",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: MIR backend does not support expression ChildProcessSpawnSync { command: String(\"node\"), args: Some(Array([String(\"-e\"), String(\"process.stdin.pipe(process.stdout)\")], None)), "
+  },
+  {
+    "set": "fixture",
+    "name": "node-cluster",
+    "status": "rejected",
+    "codes": [
+      "missing-type-annotation"
+    ],
+    "detail": "missing-type-annotation: the value type cannot be inferred for the MIR backend"
+  },
+  {
+    "set": "fixture",
+    "name": "node-cluster-roundtrip",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: an empty array literal needs a declared element type"
+  },
+  {
+    "set": "fixture",
+    "name": "node-console",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: MIR backend does not support expression NativeMethodCall { module: \"console\", class_name: None, object: None, method: \"log\", args: [String(\"guest stdout %d\"), Integer(24)] } ye"
+  },
+  {
+    "set": "fixture",
+    "name": "node-dgram",
+    "status": "rejected",
+    "codes": [
+      "missing-type-annotation"
+    ],
+    "detail": "missing-type-annotation: the value type cannot be inferred for the MIR backend"
+  },
+  {
+    "set": "fixture",
+    "name": "node-dns",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: MIR backend does not support expression NativeModuleRef(\"dns\") yet"
+  },
+  {
+    "set": "fixture",
+    "name": "node-errors",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: type AggregateError is not supported by the MIR backend yet"
+  },
+  {
+    "set": "fixture",
+    "name": "node-events",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: type EventEmitter is not supported by the MIR backend yet"
+  },
+  {
+    "set": "fixture",
+    "name": "node-express",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: MIR backend does not support expression DynamicImport { paths: [], arg: String(\"express\"), options: None, byte_offset: 167, deferred_error: None, synchronous: false, deferred: "
+  },
+  {
+    "set": "fixture",
+    "name": "node-ffi",
+    "status": "rejected",
+    "codes": [
+      "missing-type-annotation"
+    ],
+    "detail": "missing-type-annotation: the value type cannot be inferred for the MIR backend"
+  },
+  {
+    "set": "fixture",
+    "name": "node-fs",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: Unsupported filesystem import fs: synchronous and callback APIs are not supported; use node:fs/promises"
+  },
+  {
+    "set": "fixture",
+    "name": "node-globals",
+    "status": "rejected",
+    "codes": [
+      "missing-type-annotation"
+    ],
+    "detail": "missing-type-annotation: the value type cannot be inferred for the MIR backend"
+  },
+  {
+    "set": "fixture",
+    "name": "node-http",
+    "status": "rejected",
+    "codes": [
+      "missing-type-annotation"
+    ],
+    "detail": "missing-type-annotation: the value type cannot be inferred for the MIR backend"
+  },
+  {
+    "set": "fixture",
+    "name": "node-http-server",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: MIR backend does not support expression NativeMethodCall { module: \"http\", class_name: None, object: None, method: \"createServer\", args: [Closure { func_id: 3, params: [Param {"
+  },
+  {
+    "set": "fixture",
+    "name": "node-http-sockets-server",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: MIR backend does not support expression NativeMethodCall { module: \"http\", class_name: None, object: None, method: \"createServer\", args: [Closure { func_id: 2, params: [Param {"
+  },
+  {
+    "set": "fixture",
+    "name": "node-http2",
+    "status": "rejected",
+    "codes": [
+      "missing-type-annotation"
+    ],
+    "detail": "missing-type-annotation: the value type cannot be inferred for the MIR backend"
+  },
+  {
+    "set": "fixture",
+    "name": "node-https",
+    "status": "rejected",
+    "codes": [
+      "missing-type-annotation"
+    ],
+    "detail": "missing-type-annotation: the value type cannot be inferred for the MIR backend"
+  },
+  {
+    "set": "fixture",
+    "name": "node-https-server",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: MIR backend does not support expression NativeMethodCall { module: \"https\", class_name: None, object: None, method: \"createServer\", args: [New { class_name: \"__AnonShape_b8f1e9"
+  },
+  {
+    "set": "fixture",
+    "name": "node-https-wasi-tls",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: class Promise is not supported yet"
+  },
+  {
+    "set": "fixture",
+    "name": "node-inspector",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: an empty array literal needs a declared element type"
+  },
+  {
+    "set": "fixture",
+    "name": "node-module",
+    "status": "rejected",
+    "codes": [
+      "missing-type-annotation"
+    ],
+    "detail": "missing-type-annotation: the value type cannot be inferred for the MIR backend"
+  },
+  {
+    "set": "fixture",
+    "name": "node-net",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: MIR backend does not support expression NativeMethodCall { module: \"net\", class_name: None, object: None, method: \"BlockList\", args: [] } yet"
+  },
+  {
+    "set": "fixture",
+    "name": "node-os",
+    "status": "rejected",
+    "codes": [
+      "missing-type-annotation"
+    ],
+    "detail": "missing-type-annotation: the value type cannot be inferred for the MIR backend"
+  },
+  {
+    "set": "fixture",
+    "name": "node-path",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: MIR backend does not support expression PathJoin(PathJoin(PathJoin(String(\"a\"), String(\"b\")), String(\"..\")), String(\"c\")) yet"
+  },
+  {
+    "set": "fixture",
+    "name": "node-path-missing-environment",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: MIR backend does not support expression PathJoin(String(\"a\"), String(\"b\")) yet"
+  },
+  {
+    "set": "fixture",
+    "name": "node-path-p3",
+    "status": "rejected",
+    "codes": [
+      "missing-type-annotation"
+    ],
+    "detail": "missing-type-annotation: the value type cannot be inferred for the MIR backend"
+  },
+  {
+    "set": "fixture",
+    "name": "node-perf-hooks",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: MIR backend does not support expression NativeMethodCall { module: \"perf_hooks\", class_name: None, object: None, method: \"clearMarks\", args: [] } yet"
+  },
+  {
+    "set": "fixture",
+    "name": "node-process",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: Unsupported capability import process: only node:timers/promises, node:fs/promises and Writable from node:stream are supported so far"
+  },
+  {
+    "set": "fixture",
+    "name": "node-process-custom",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: Unsupported capability import process: only node:timers/promises, node:fs/promises and Writable from node:stream are supported so far"
+  },
+  {
+    "set": "fixture",
+    "name": "node-querystring",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: MIR backend does not support expression NativeMethodCall { module: \"querystring\", class_name: None, object: None, method: \"parse\", args: [String(\"value=one&value=two+words&empt"
+  },
+  {
+    "set": "fixture",
+    "name": "node-readline",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: failed to lower source.js: The requested module 'node:readline' does not provide an export named 'Interface'"
+  },
+  {
+    "set": "fixture",
+    "name": "node-repl",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: failed to lower source.js: The requested module 'node:readline' does not provide an export named 'Interface'"
+  },
+  {
+    "set": "fixture",
+    "name": "node-sqlite",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: Unsupported capability import node:sqlite: only node:timers/promises, node:fs/promises and Writable from node:stream are supported so far"
+  },
+  {
+    "set": "fixture",
+    "name": "node-stream",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: failed to lower source.js: Cannot find module 'node:stream/iter'. No such built-in module: node:stream/iter"
+  },
+  {
+    "set": "fixture",
+    "name": "node-stream-classic",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: only named imports from stream are supported yet"
+  },
+  {
+    "set": "fixture",
+    "name": "node-string-decoder",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: type StringDecoder is not supported by the MIR backend yet"
+  },
+  {
+    "set": "fixture",
+    "name": "node-test",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: failed to lower source.js: The requested module 'node:test' does not provide an export named 'getTestContext'"
+  },
+  {
+    "set": "fixture",
+    "name": "node-timers",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: Unsupported capability import timers: only node:timers/promises, node:fs/promises and Writable from node:stream are supported so far"
+  },
+  {
+    "set": "fixture",
+    "name": "node-tls",
+    "status": "skipped",
+    "codes": [],
+    "detail": "the component has no WIT world"
+  },
+  {
+    "set": "fixture",
+    "name": "node-trace-events",
+    "status": "rejected",
+    "codes": [
+      "missing-type-annotation"
+    ],
+    "detail": "missing-type-annotation: the value type cannot be inferred for the MIR backend"
+  },
+  {
+    "set": "fixture",
+    "name": "node-tty",
+    "status": "rejected",
+    "codes": [
+      "missing-type-annotation"
+    ],
+    "detail": "missing-type-annotation: the value type cannot be inferred for the MIR backend"
+  },
+  {
+    "set": "fixture",
+    "name": "node-url",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: failed to lower source.js: URL constructor requires at least 1 argument"
+  },
+  {
+    "set": "fixture",
+    "name": "node-util",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: lone UTF-16 surrogate in a string literal; Perry strings contain Unicode scalars only"
+  },
+  {
+    "set": "fixture",
+    "name": "node-v8",
+    "status": "rejected",
+    "codes": [
+      "missing-type-annotation"
+    ],
+    "detail": "missing-type-annotation: the value type cannot be inferred for the MIR backend"
+  },
+  {
+    "set": "fixture",
+    "name": "node-vfs",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: failed to lower component.js: Cannot find module 'node:vfs'. No such built-in module: node:vfs"
+  },
+  {
+    "set": "fixture",
+    "name": "node-vm",
+    "status": "rejected",
+    "codes": [
+      "missing-type-annotation"
+    ],
+    "detail": "missing-type-annotation: the value type cannot be inferred for the MIR backend"
+  },
+  {
+    "set": "fixture",
+    "name": "node-wasi",
+    "status": "rejected",
+    "codes": [
+      "missing-type-annotation"
+    ],
+    "detail": "missing-type-annotation: the value type cannot be inferred for the MIR backend"
+  },
+  {
+    "set": "fixture",
+    "name": "node-worker-threads",
+    "status": "rejected",
+    "codes": [
+      "missing-type-annotation"
+    ],
+    "detail": "missing-type-annotation: the value type cannot be inferred for the MIR backend"
+  },
+  {
+    "set": "fixture",
+    "name": "node-zlib",
+    "status": "rejected",
+    "codes": [
+      "unsupported-expression"
+    ],
+    "detail": "unsupported-expression: Transform from stream is not supported yet"
+  },
+  {
+    "set": "fixture",
+    "name": "quickjs-futures",
+    "status": "skipped",
+    "codes": [],
+    "detail": "uses the QuickJS backend's `wit` global"
+  },
+  {
+    "set": "fixture",
+    "name": "resource-disposal",
+    "status": "compiled",
+    "codes": [],
+    "detail": ""
+  },
+  {
+    "set": "fixture",
+    "name": "script-only/calc.ts",
+    "status": "compiled",
+    "codes": [],
+    "detail": ""
+  },
+  {
+    "set": "fixture",
+    "name": "script-only/greet.js",
+    "status": "rejected",
+    "codes": [
+      "codegen-failure"
+    ],
+    "detail": "codegen-failure: optimizing MIR"
+  },
+  {
+    "set": "fixture",
+    "name": "simple-resource",
+    "status": "compiled",
+    "codes": [],
+    "detail": ""
+  },
+  {
+    "set": "fixture",
+    "name": "typescript-direct",
+    "status": "compiled",
+    "codes": [],
+    "detail": ""
+  },
+  {
+    "set": "fixture",
+    "name": "wasi-http-detection-new",
+    "status": "compiled",
+    "codes": [],
+    "detail": ""
+  },
+  {
+    "set": "fixture",
+    "name": "wasi-http-detection-old",
+    "status": "compiled",
+    "codes": [],
+    "detail": ""
+  }
+]

@@ -46,6 +46,20 @@ fn interface_member_name(resolve: &Resolve, key: &WorldKey, function: &Function)
     to_camel_case(&format!("{interface}-{}", function.name))
 }
 
+/// The exported function implementing the destructor of an exported resource: `dtor` of
+/// `counter` in `interface counters` is `countersDtorCounter`. It takes the representation
+/// the resource was created with.
+pub fn destructor_name(resolve: &Resolve, key: &WorldKey, resource: &str) -> String {
+    let interface = match key {
+        WorldKey::Name(name) => name.as_str(),
+        WorldKey::Interface(id) => resolve.interfaces[*id]
+            .name
+            .as_deref()
+            .unwrap_or("interface"),
+    };
+    to_camel_case(&format!("{interface}-dtor-{resource}"))
+}
+
 /// Uses an interface prefix for implementation functions, qualifying package collisions.
 pub fn interface_implementation_name(
     resolve: &Resolve,

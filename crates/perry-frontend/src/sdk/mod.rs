@@ -1,5 +1,5 @@
 //! TypeScript declarations for a resolved component contract.
-mod codegen;
+pub(crate) mod codegen;
 
 use anyhow::Result;
 use wit_parser::{Resolve, WorldId};
